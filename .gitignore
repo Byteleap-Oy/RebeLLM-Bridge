@@ -1,0 +1,6 @@
+node_modules/
+dist/
+# OpenSpec archived changes are local history; merged specs are committed
+openspec/changes/archive/
+.claude/settings.local.json
+*.log

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Checks the staged snapshot in a temp copy, so unstaged work cannot change the result.
+root=$(git rev-parse --show-toplevel) || exit 1
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rebellm-bridge-precommit.XXXXXX") || exit 1
+link=""
+
+case "$(uname -s)" in
+MINGW* | MSYS* | CYGWIN*) win=1 ;;
+*) win=0 ;;
+esac
+
+cleanup() {
+  # Remove the link first: a recursive delete must never follow the real node_modules.
+  if [ -n "$link" ]; then
+    if [ $win = 1 ]; then MSYS_NO_PATHCONV=1 cmd.exe /c rmdir "$(cygpath -w "$link")" >/dev/null 2>&1; else rm -f "$link"; fi
+  fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+git checkout-index -a --prefix="$tmp/" || exit 1
+if [ -d "$root/node_modules" ]; then
+  if [ $win = 1 ]; then
+    MSYS_NO_PATHCONV=1 cmd.exe /c mklink /J "$(cygpath -w "$tmp/node_modules")" "$(cygpath -w "$root/node_modules")" >/dev/null || exit 1
+  else
+    ln -s "$root/node_modules" "$tmp/node_modules" || exit 1
+  fi
+  link="$tmp/node_modules"
+fi
+
+start=$(date +%s)
+if (cd "$tmp" && npm run --silent check); then
+  echo "pre-commit: checks passed in $(($(date +%s) - start)) s"
+else
+  echo "pre-commit: checks FAILED in $(($(date +%s) - start)) s" >&2
+  exit 1
+fi
