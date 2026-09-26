@@ -1,5 +1,5 @@
 import { once } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { completion, toChatInput } from './openai.js'
 import type { ChatRequest } from './protocol.js'
 import { bridge } from './test/harness.js'
@@ -330,6 +330,67 @@ describe('/v1/chat/completions', () => {
     expect(r.status).toBe(400)
     r = await fetch(`${b.base}/v1/chat/completions`)
     expect(r.status).toBe(405)
+  })
+})
+
+describe('/v1/chat/completions request log', () => {
+  it('logs plain and streamed answers, never their content', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    tab.onChat = (c) => {
+      tab.send({ t: 'queued', id: c.id, position: 3 })
+      tab.answer(c.id, ['Hello', ' there'], 'length')
+    }
+    const plain = await json(post(b.base, { messages: [user('say hello')] }))
+    tab.onChat = (c) => {
+      tab.send({ t: 'tool_call', id: c.id, calls: [{ id: 'c1', function: { name: 'weather', arguments: {} } }] })
+      tab.send({ t: 'done', id: c.id, stop: 'tool_call', usage: { prompt: 1, completion: 1, tokensPerSec: 1 } })
+    }
+    const tools = [{ type: 'function', function: { name: 'weather' } }]
+    const data = await sse(await post(b.base, { messages: [user('weather?')], tools, stream: true }))
+    const streamed = JSON.parse(data[0]!).id
+    // 'weather?' + 'weather' + '{"type":"object","properties":{}}' = 48 chars
+    expect(b.requests()).toEqual([
+      `chat ${plain.id} /v1/chat/completions: arrived, 3 prompt tokens, 0 tools`,
+      `chat ${plain.id} /v1/chat/completions: queued at 3 +Ns`,
+      `chat ${plain.id} /v1/chat/completions: first token +Ns`,
+      `chat ${plain.id} /v1/chat/completions: done length, 2 tokens, +Ns`,
+      `chat ${streamed} /v1/chat/completions: arrived, 14 prompt tokens, 1 tool`,
+      `chat ${streamed} /v1/chat/completions: first token +Ns`,
+      `chat ${streamed} /v1/chat/completions: done tool_calls, 1 token, +Ns`,
+    ])
+    expect(b.lines.join('\n')).not.toMatch(/hello|Hello|weather\?/)
+  })
+
+  it('logs a refusal, the tab’s errors and a client that gives up', async () => {
+    const b = await bridge({ waitMs: 50 })
+    expect((await post(b.base, { messages: [user('hi')] })).status).toBe(503)
+    const tab = await b.tab()
+    tab.onChat = (c) => tab.send({ t: 'error', id: c.id, message: 'out of memory' })
+    expect((await post(b.base, { messages: [user('hi')] })).status).toBe(502)
+    await (await post(b.base, { messages: [user('hi')], stream: true })).text()
+    tab.onChat = null
+    const ctl = new AbortController()
+    const req = fetch(`${b.base}/v1/chat/completions`, {
+      method: 'POST',
+      body: JSON.stringify({ messages: [user('hi')], stream: true }),
+      signal: ctl.signal,
+    }).catch(() => null)
+    await tab.nextChat()
+    ctl.abort()
+    await req
+    await vi.waitFor(() => expect(b.requests()).toHaveLength(8))
+    const arrived = '/v1/chat/completions: arrived, 1 prompt token, 0 tools'
+    expect(b.requests().map((l) => l.replace(/^chat chatcmpl-[0-9a-f]{24} /, ''))).toEqual([
+      arrived,
+      '/v1/chat/completions: refused 503 no RebeLLM tab connected +Ns',
+      arrived,
+      '/v1/chat/completions: error the tab reported: out of memory +Ns',
+      arrived,
+      '/v1/chat/completions: error the tab reported: out of memory +Ns',
+      arrived,
+      '/v1/chat/completions: client aborted +Ns',
+    ])
   })
 })
 

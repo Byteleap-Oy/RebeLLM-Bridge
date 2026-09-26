@@ -2,7 +2,9 @@ import type { Readable, Writable } from 'node:stream'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod'
+import { estimateTokens, newId } from './anthropic/map.js'
 import type { Usage } from './protocol.js'
+import { requestLog, type LogLine } from './reqlog.js'
 import type { ChatInput, ChatOptions, ChatResult, Health, TabLink } from './tab.js'
 
 /** How the MCP face reaches a tab: in this process, or through a bridge already running. */
@@ -116,7 +118,8 @@ export function describeHealth(h: Health): string {
 
 const message = z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() })
 
-export function createMcpServer(backend: ChatBackend, version: string): McpServer {
+/** `log` takes the `chat` tool's request lines. */
+export function createMcpServer(backend: ChatBackend, version: string, log?: LogLine): McpServer {
   const server = new McpServer({ name: 'rebellm-bridge', version })
   server.registerTool(
     'chat',
@@ -142,23 +145,31 @@ export function createMcpServer(backend: ChatBackend, version: string): McpServe
             params: { progressToken: token, progress: ++n, message },
           })
           .catch(() => undefined)
+      const input: ChatInput = {
+        messages,
+        ...(max_tokens !== undefined ? { maxTokens: max_tokens } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+      }
+      const rlog = requestLog(log, 'mcp', `mcp_${newId()}`)
+      rlog.arrived(estimateTokens(input), 0)
       try {
-        const r = await backend.chat(
-          {
-            messages,
-            ...(max_tokens !== undefined ? { maxTokens: max_tokens } : {}),
-            ...(temperature !== undefined ? { temperature } : {}),
+        const r = await backend.chat(input, {
+          signal: extra.signal,
+          onEvent: (e) => {
+            if (e.t === 'token') {
+              rlog.firstToken()
+              progress(e.text)
+            } else if (e.t === 'queued') {
+              rlog.queued(e.position)
+              progress(`waiting in the tab's queue, position ${e.position}`)
+            }
           },
-          {
-            signal: extra.signal,
-            onEvent: (e) => {
-              if (e.t === 'token') progress(e.text)
-              else if (e.t === 'queued') progress(`waiting in the tab's queue, position ${e.position}`)
-            },
-          },
-        )
+        })
+        rlog.done(r.stop, r.usage.completion)
         return { content: [{ type: 'text', text: r.text }] }
       } catch (e) {
+        if (extra.signal.aborted) rlog.aborted()
+        else rlog.error(e)
         return { isError: true, content: [{ type: 'text', text: `RebeLLM: ${(e as Error).message}` }] }
       }
     },

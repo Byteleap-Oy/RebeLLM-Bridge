@@ -31,18 +31,29 @@ function io(env: NodeJS.ProcessEnv = {}) {
   return { io: value, out, err, stdin }
 }
 
-const defaults = { port: 7343, host: '127.0.0.1', waitSec: 120, mcp: false, help: false, version: false }
+const defaults = {
+  port: 7343,
+  host: '127.0.0.1',
+  waitSec: 120,
+  mcp: false,
+  quiet: false,
+  help: false,
+  version: false,
+}
 
 describe('parseCli', () => {
   it('has the documented defaults and reads every flag', () => {
     expect(parseCli([])).toEqual(defaults)
-    expect(parseCli(['--port', '8000', '--host', '0.0.0.0', '--token', ' t ', '--wait', '5', '--mcp'])).toEqual({
+    expect(
+      parseCli(['--port', '8000', '--host', '0.0.0.0', '--token', ' t ', '--wait', '5', '--mcp', '--quiet']),
+    ).toEqual({
       ...defaults,
       port: 8000,
       host: '0.0.0.0',
       token: 't',
       waitSec: 5,
       mcp: true,
+      quiet: true,
     })
     expect(parseCli(['--wait', '0', '--port', '0'])).toMatchObject({ waitSec: 0, port: 0 })
   })
@@ -113,6 +124,31 @@ describe('run', () => {
     await once(running.server!.tab, 'change')
     expect(running.server!.tab.health()).toMatchObject({ tab: true, state: 'ready' })
     expect(t.out.text()).toContain('rebellm-bridge: RebeLLM tab connected')
+  })
+
+  it('logs a line per request event unless --quiet, and the tab either way', async () => {
+    for (const quiet of [false, true]) {
+      const t = io({ REBELLM_BRIDGE_TOKEN: 'env-token' })
+      const running = await run({ ...defaults, port: 0, quiet }, t.io)
+      onTestFinished(() => running.close())
+      const port = running.server!.port
+      const tab = await FakeTab.ready(`ws://127.0.0.1:${port}`, 'env-token')
+      onTestFinished(() => void tab.ws.terminate())
+      tab.onChat = (c) => tab.answer(c.id, ['ok'])
+      const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: 'POST',
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'private words' }] }),
+      })
+      const { id } = (await r.json()) as { id: string }
+      const out = t.out.text()
+      expect(out).toContain('rebellm-bridge: RebeLLM tab connected')
+      expect(out).not.toContain('private words')
+      if (quiet) expect(out).not.toContain('rebellm-bridge: chat ')
+      else {
+        expect(out).toContain(`rebellm-bridge: chat ${id} /v1/chat/completions: arrived, 4 prompt tokens, 0 tools\n`)
+        expect(out).toMatch(new RegExp(`rebellm-bridge: chat ${id} /v1/chat/completions: done stop, 1 token, \\+`))
+      }
+    }
   })
 
   it('does not print a stored token again', async () => {

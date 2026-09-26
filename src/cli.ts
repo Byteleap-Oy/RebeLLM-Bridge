@@ -25,6 +25,7 @@ Lets Claude Code (MCP or rebellm-claude) and OpenAI-style clients use the model 
   --token <t>     token the tab must present (default: ${TOKEN_ENV}, else ~/.rebellm-bridge/token)
   --wait <s>      seconds a request waits for the tab and its model (default 120)
   --mcp           serve MCP over stdio as well (Claude Code starts the bridge this way)
+  --quiet         no log line per request (arrival, queue, first token, end)
   --version       print the version
   --help          print this help`
 
@@ -34,6 +35,7 @@ export interface CliOptions {
   token?: string
   waitSec: number
   mcp: boolean
+  quiet: boolean
   help: boolean
   version: boolean
 }
@@ -50,6 +52,7 @@ export function parseCli(argv: string[]): CliOptions | { error: string } {
         token: { type: 'string' },
         wait: { type: 'string' },
         mcp: { type: 'boolean' },
+        quiet: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
       },
@@ -70,6 +73,7 @@ export function parseCli(argv: string[]): CliOptions | { error: string } {
     ...(v.token !== undefined ? { token: v.token.trim() } : {}),
     waitSec,
     mcp: !!v.mcp,
+    quiet: !!v.quiet,
     help: !!v.help,
     version: !!v.version,
   }
@@ -146,6 +150,7 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
   const out = o.mcp ? io.stderr : io.stdout
   const say = (line: string) => void out.write(`${line}\n`)
   const log = (line: string) => say(`rebellm-bridge: ${line}`)
+  const requestLog = o.quiet ? () => undefined : log
   const tok = resolveToken({
     ...(o.token ? { flag: o.token } : {}),
     ...(io.env[TOKEN_ENV] ? { env: io.env[TOKEN_ENV] } : {}),
@@ -162,7 +167,14 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
   let server: BridgeServer | null = null
   let backend: ChatBackend | null = null
   try {
-    server = await startServer({ host: o.host, port: o.port, token: tok.token, waitMs: o.waitSec * 1000, log })
+    server = await startServer({
+      host: o.host,
+      port: o.port,
+      token: tok.token,
+      waitMs: o.waitSec * 1000,
+      log,
+      requestLog,
+    })
     if (o.mcp) backend = tabBackend(server.tab, o.waitSec * 1000)
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e
@@ -189,7 +201,7 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
 
   let done: Promise<void> = new Promise(() => undefined)
   if (o.mcp && backend) {
-    done = serveStdio(createMcpServer(backend, VERSION), io.stdin, io.stdout)
+    done = serveStdio(createMcpServer(backend, VERSION, requestLog), io.stdin, io.stdout)
   }
   return {
     server,

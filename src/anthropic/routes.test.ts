@@ -1,5 +1,5 @@
 import { request } from 'node:http'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { ChatRequest } from '../protocol.js'
 import { FakeTab } from '../test/fake-tab.js'
 import { TOKEN, bridge } from '../test/harness.js'
@@ -236,6 +236,7 @@ describe('POST /v1/messages', () => {
     })
     tab.onChat = (c) =>
       tab.send({ t: 'error', id: c.id, message: "The prompt needs 25 tokens; the tab's context holds 20" })
+    expect(b.requests()[1]).toMatch(/: refused 400 prompt is too long: 20 tokens > 19 maximum \+Ns$/)
     r = await post(b.base, { max_tokens: 9, messages: [user('x'.repeat(60))] })
     expect(r.status).toBe(400)
     expect(await r.json()).toMatchObject({ error: { message: 'prompt is too long: 25 tokens > 20 maximum' } })
@@ -264,6 +265,11 @@ describe('POST /v1/messages', () => {
       type: 'error',
       error: { type: 'api_error', message: 'the RebeLLM tab disconnected' },
     })
+    expect(b.requests().filter((l) => l.includes(': error '))).toEqual([
+      expect.stringMatching(/ \/v1\/messages: error the tab reported: out of memory \+Ns$/),
+      expect.stringMatching(/ \/v1\/messages: error the tab reported: out of memory \+Ns$/),
+      expect.stringMatching(/ \/v1\/messages: error the RebeLLM tab disconnected \+Ns$/),
+    ])
   })
 
   it('answers bad requests, other methods and unknown routes in Anthropic’s shape', async () => {
@@ -314,6 +320,73 @@ describe('POST /v1/messages', () => {
     expect(rebound.status).toBe(403)
     expect(JSON.parse(rebound.body)).toMatchObject({ error: { type: 'permission_error' } })
     await expect(tab.nextChat(100)).rejects.toThrow('no matching frame')
+  })
+})
+
+describe('request log', () => {
+  /** The id of the first request line. */
+  const idOf = (lines: string[]) => lines[0]?.split(' ')[1]
+
+  it('logs a streamed answer from arrival to end, never its content', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    tab.onChat = (c) => {
+      tab.send({ t: 'queued', id: c.id, position: 2 })
+      tab.answer(c.id, ['Hel', 'sinki'])
+    }
+    const tools = [{ name: 'Read', input_schema: { type: 'object' } }]
+    const all = await events(
+      await post(b.base, { max_tokens: 9, stream: true, tools, messages: [user('Capital of Finland?')] }),
+    )
+    const id = all[0].message.id
+    // 19 + 'Read' + '{"type":"object"}' = 40 chars
+    expect(b.requests()).toEqual([
+      `chat ${id} /v1/messages: arrived, 12 prompt tokens, 1 tool`,
+      `chat ${id} /v1/messages: queued at 2 +Ns`,
+      `chat ${id} /v1/messages: first token +Ns`,
+      `chat ${id} /v1/messages: done end_turn, 2 tokens, +Ns`,
+    ])
+    expect(b.lines.join('\n')).not.toMatch(/Capital|Hel|sinki/)
+  })
+
+  it('logs a client that gives up while the tab is still prefilling', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    const ctl = new AbortController()
+    const req = fetch(`${b.base}/v1/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ max_tokens: 9, stream: true, messages: [user('long story')] }),
+      signal: ctl.signal,
+    }).catch(() => null)
+    const chat = await tab.nextChat()
+    tab.send({ t: 'queued', id: chat.id, position: 1 })
+    await vi.waitFor(() => expect(b.requests()).toHaveLength(2))
+    ctl.abort()
+    await req
+    await vi.waitFor(() => expect(b.requests()).toHaveLength(3))
+    const id = idOf(b.requests())
+    expect(b.requests()).toEqual([
+      `chat ${id} /v1/messages: arrived, 3 prompt tokens, 0 tools`,
+      `chat ${id} /v1/messages: queued at 1 +Ns`,
+      `chat ${id} /v1/messages: client aborted +Ns`,
+    ])
+  })
+
+  it('logs a refusal when no tab or model is ready after the wait', async () => {
+    const b = await bridge({ waitMs: 50 })
+    expect((await post(b.base, { max_tokens: 9, messages: [user('hi')] })).status).toBe(503)
+    const tab = await b.tab(null)
+    tab.send({ t: 'status', state: 'loading' })
+    expect((await post(b.base, { max_tokens: 9, stream: true, messages: [user('hi')] })).status).toBe(503)
+    const lines = b.requests()
+    const [first, second] = [idOf(lines), idOf(lines.slice(2))]
+    expect(first).not.toBe(second)
+    expect(lines).toEqual([
+      `chat ${first} /v1/messages: arrived, 1 prompt token, 0 tools`,
+      `chat ${first} /v1/messages: refused 503 no RebeLLM tab connected +Ns`,
+      `chat ${second} /v1/messages: arrived, 1 prompt token, 0 tools`,
+      `chat ${second} /v1/messages: refused 503 model loading +Ns`,
+    ])
   })
 })
 

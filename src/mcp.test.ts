@@ -2,12 +2,12 @@ import { once } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createMcpServer, describeHealth, httpBackend, serveStdio, tabBackend, type ChatBackend } from './mcp.js'
 import { bridge } from './test/harness.js'
 
-async function connect(backend: ChatBackend) {
-  const server = createMcpServer(backend, '0.0.0-test')
+async function connect(backend: ChatBackend, log?: (line: string) => void) {
+  const server = createMcpServer(backend, '0.0.0-test', log)
   const client = new Client({ name: 'test', version: '1' })
   const [a, b] = InMemoryTransport.createLinkedPair()
   await Promise.all([server.connect(a), client.connect(b)])
@@ -54,6 +54,41 @@ describe('MCP server', () => {
       ' the tab',
     ])
     expect(progress.map((p) => p.progress)).toEqual([1, 2, 3, 4])
+  })
+
+  it('logs each chat from arrival to its end, a cancel and a failure, never the content', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    tab.onChat = (c) => {
+      tab.send({ t: 'queued', id: c.id, position: 1 })
+      tab.answer(c.id, ['Hi', ' from', ' the tab'], 'length')
+    }
+    const lines: string[] = []
+    const client = await connect(tabBackend(b.server.tab, 1000), (l) => lines.push(l))
+    const ask = { messages: [{ role: 'user', content: 'hello there' }] }
+    await client.callTool({ name: 'chat', arguments: ask })
+    tab.onChat = null
+    const ctl = new AbortController()
+    const call = client.callTool({ name: 'chat', arguments: ask }, undefined, { signal: ctl.signal })
+    await tab.nextChat()
+    ctl.abort()
+    await expect(call).rejects.toThrow()
+    await vi.waitFor(() => expect(lines).toHaveLength(6))
+    tab.onChat = (c) => tab.send({ t: 'error', id: c.id, message: 'out of memory' })
+    await client.callTool({ name: 'chat', arguments: ask })
+    const seen = lines.map((l) => l.replace(/^chat mcp_[0-9a-f]{24} mcp: /, '').replace(/\+\d+\.\ds$/, '+Ns'))
+    expect(seen).toEqual([
+      'arrived, 4 prompt tokens, 0 tools',
+      'queued at 1 +Ns',
+      'first token +Ns',
+      'done length, 3 tokens, +Ns',
+      'arrived, 4 prompt tokens, 0 tools',
+      'client aborted +Ns',
+      'arrived, 4 prompt tokens, 0 tools',
+      'error the tab reported: out of memory +Ns',
+    ])
+    expect(new Set(lines.map((l) => l.split(' ')[1])).size).toBe(3)
+    expect(lines.join('\n')).not.toMatch(/hello|Hi| from/)
   })
 
   it('passes max_tokens and temperature to the tab', async () => {

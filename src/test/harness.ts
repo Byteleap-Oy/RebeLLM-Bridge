@@ -24,6 +24,8 @@ export async function bridge(o: Partial<ServerOptions> = {}) {
   return {
     server,
     lines,
+    /** The request log lines, their seconds as `+Ns` so tests can compare them. */
+    requests: () => lines.filter((l) => l.startsWith('chat ')).map((l) => l.replace(/\+\d+\.\ds$/, '+Ns')),
     ws,
     base: `http://127.0.0.1:${server.port}`,
     /** A connected tab whose model is ready. */

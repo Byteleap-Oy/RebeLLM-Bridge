@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest'
+import { requestLog } from './reqlog.js'
+import { ChatError } from './tab.js'
+
+function setup(route = '/v1/messages', id = 'msg_ab12') {
+  const lines: string[] = []
+  let t = 1_000_000
+  const log = requestLog(
+    (l) => lines.push(l),
+    route,
+    id,
+    () => t,
+  )
+  return { lines, log, advance: (ms: number) => (t += ms) }
+}
+
+describe('requestLog', () => {
+  it('writes one line per event with the seconds since arrival', () => {
+    const { lines, log, advance } = setup()
+    log.arrived(11204, 18)
+    advance(400)
+    log.queued(2)
+    advance(411_900)
+    log.firstToken()
+    advance(1000)
+    log.firstToken()
+    advance(57_700)
+    log.done('end_turn', 96)
+    expect(lines).toEqual([
+      'chat msg_ab12 /v1/messages: arrived, 11 204 prompt tokens, 18 tools',
+      'chat msg_ab12 /v1/messages: queued at 2 +0.4s',
+      'chat msg_ab12 /v1/messages: first token +412.3s',
+      'chat msg_ab12 /v1/messages: done end_turn, 96 tokens, +471.0s',
+    ])
+  })
+
+  it('says when the client gave up', () => {
+    const { lines, log, advance } = setup('/v1/chat/completions', 'chatcmpl-1')
+    log.arrived(1, 1)
+    log.queued(1)
+    advance(600_100)
+    log.aborted()
+    expect(lines).toEqual([
+      'chat chatcmpl-1 /v1/chat/completions: arrived, 1 prompt token, 1 tool',
+      'chat chatcmpl-1 /v1/chat/completions: queued at 1 +0.0s',
+      'chat chatcmpl-1 /v1/chat/completions: client aborted +600.1s',
+    ])
+  })
+
+  it('logs refusals and errors, naming the tab when it reported one', () => {
+    const { lines, log, advance } = setup('mcp', 'mcp_1')
+    log.refused(503, 'model loading')
+    advance(5000)
+    log.error(new ChatError('out of memory', 'tab'))
+    log.error(new ChatError('the RebeLLM tab disconnected', 'disconnected'))
+    log.error('odd')
+    log.done('eos', 1)
+    expect(lines).toEqual([
+      'chat mcp_1 mcp: refused 503 model loading +0.0s',
+      'chat mcp_1 mcp: error the tab reported: out of memory +5.0s',
+      'chat mcp_1 mcp: error the RebeLLM tab disconnected +5.0s',
+      'chat mcp_1 mcp: error odd +5.0s',
+      'chat mcp_1 mcp: done eos, 1 token, +5.0s',
+    ])
+  })
+
+  it('writes nothing without a log', () => {
+    const log = requestLog(undefined, '/v1/messages', 'msg_1')
+    expect(() => {
+      log.arrived(1, 0)
+      log.firstToken()
+      log.done('end_turn', 1)
+    }).not.toThrow()
+  })
+})

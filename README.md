@@ -93,6 +93,7 @@ Tools: `chat` (messages, optional `max_tokens`, `temperature`; streams progress)
 | `--token <t>`   | `REBELLM_BRIDGE_TOKEN`, file | the token the tab must present                     |
 | `--wait <s>`    | `120`                        | how long a request waits for a ready tab           |
 | `--mcp`         | off                          | also serve MCP over stdio                          |
+| `--quiet`       | off                          | no log line per request (never its content)        |
 
 ## Test it locally
 

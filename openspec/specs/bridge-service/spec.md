@@ -73,3 +73,17 @@ port, the MCP server SHALL use that bridge instead of failing.
 - **WHEN** Claude Code starts `rebellm-bridge --mcp` while a bridge started by hand holds the port
 - **THEN** the `chat` tool answers through the running bridge's tab
 
+### Requirement: Request log
+The bridge SHALL write one log line per request event, with the request's id, route and
+seconds since arrival: arrival with the estimated prompt tokens and tool count, queue
+position, first token, end with the stop reason and output tokens, a client abort, a
+refusal, or an error; message content SHALL never be logged; `--quiet` SHALL silence it.
+
+#### Scenario: Client gives up
+- **WHEN** an HTTP client closes its connection 600 s into a request that has produced no token
+- **THEN** the log reads that the client aborted at +600 s after the arrival and queue lines
+
+#### Scenario: Quiet
+- **WHEN** the bridge runs with `--quiet`
+- **THEN** no request lines are written
+

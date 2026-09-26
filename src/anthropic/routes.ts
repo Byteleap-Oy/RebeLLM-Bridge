@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { HttpError, clientGone, pathOf, readJson, sendJson } from '../http.js'
+import { requestLog, type LogLine, type RequestLog } from '../reqlog.js'
 import { ChatError, type ChatInput, type TabLink } from '../tab.js'
 import {
   content,
@@ -25,6 +26,8 @@ export interface MessagesOptions {
   /** How long a request waits for a tab with a ready model. */
   waitMs: number
   pingMs?: number
+  /** Request lines; none without it. */
+  log?: LogLine
 }
 
 /** Anthropic's error shape, the only one its SDKs (and Claude Code) read. */
@@ -56,6 +59,7 @@ async function answer(
   estimate: number,
   signal: AbortSignal,
   sink: Sink,
+  rlog: RequestLog,
 ): Promise<Outcome> {
   const matcher = new StopMatcher(stops)
   const halt = new AbortController()
@@ -64,11 +68,13 @@ async function answer(
     const r = await tab.chat(input, {
       signal: AbortSignal.any([signal, halt.signal]),
       onEvent: (e) => {
+        if (e.t === 'queued') return rlog.queued(e.position)
+        rlog.firstToken()
         if (e.t === 'token') {
           frames++
           sink.text(matcher.push(e.text))
           if (matcher.matched !== null) halt.abort()
-        } else if (e.t === 'tool_call') for (const c of e.calls) sink.toolUse(toolUse(c))
+        } else for (const c of e.calls) sink.toolUse(toolUse(c))
       },
     })
     sink.text(matcher.flush())
@@ -96,15 +102,21 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
     if (raw === undefined) return
     const parsed = toChatInput(raw)
     if ('error' in parsed) return sendApiError(res, 400, 'invalid_request_error', parsed.error)
+    const id = `msg_${newId()}`
+    const estimate = estimateTokens(parsed.input)
+    const rlog = requestLog(o.log, '/v1/messages', id)
+    rlog.arrived(estimate, parsed.input.tools?.length ?? 0)
+    const refuse = (status: number, type: ErrorType, message: string) => {
+      rlog.refused(status, message)
+      sendApiError(res, status, type, message)
+    }
     const gone = clientGone(res)
     const missing = await tab.waitReady(o.waitMs, gone)
-    if (gone.aborted) return
-    if (missing) return sendApiError(res, 503, 'api_error', missing.message)
-    const estimate = estimateTokens(parsed.input)
+    if (gone.aborted) return rlog.aborted()
+    if (missing) return refuse(503, 'api_error', missing.message)
     const context = tab.health().contextTokens
-    if (context && estimate >= context)
-      return sendApiError(res, 400, 'invalid_request_error', tooLong(estimate, context - 1))
-    const meta = { id: `msg_${newId()}`, model: tab.modelName }
+    if (context && estimate >= context) return refuse(400, 'invalid_request_error', tooLong(estimate, context - 1))
+    const meta = { id, model: tab.modelName }
     const { input, stopSequences } = parsed
 
     if (parsed.stream) {
@@ -114,13 +126,23 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
       w.start(message(meta, [], { reason: null, sequence: null }, usage(estimate, 0)))
       const beat = setInterval(() => w.ping(), o.pingMs ?? PING_MS)
       try {
-        const out = await answer(tab, input, stopSequences, estimate, gone, {
-          text: (t) => w.text(t),
-          toolUse: (b) => w.toolUse(b),
-        })
+        const out = await answer(
+          tab,
+          input,
+          stopSequences,
+          estimate,
+          gone,
+          { text: (t) => w.text(t), toolUse: (b) => w.toolUse(b) },
+          rlog,
+        )
+        rlog.done(out.reason, out.usage.output_tokens)
         w.finish(out.reason, out.sequence, out.usage)
       } catch (e) {
-        if (!gone.aborted) w.error(tabError((e as Error).message))
+        if (gone.aborted) rlog.aborted()
+        else {
+          rlog.error(e)
+          w.error(tabError((e as Error).message))
+        }
       } finally {
         clearInterval(beat)
       }
@@ -130,15 +152,22 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
     let text = ''
     const calls: ToolUseBlock[] = []
     try {
-      const out = await answer(tab, input, stopSequences, estimate, gone, {
-        text: (t) => (text += t),
-        toolUse: (b) => calls.push(b),
-      })
+      const out = await answer(
+        tab,
+        input,
+        stopSequences,
+        estimate,
+        gone,
+        { text: (t) => (text += t), toolUse: (b) => calls.push(b) },
+        rlog,
+      )
+      rlog.done(out.reason, out.usage.output_tokens)
       sendJson(res, 200, message(meta, content(text, calls), { reason: out.reason, sequence: out.sequence }, out.usage))
     } catch (e) {
-      if (gone.aborted) return
+      if (gone.aborted) return rlog.aborted()
       const err = e as ChatError
-      if (err instanceof ChatError && err.kind === 'no_tab') return sendApiError(res, 503, 'api_error', err.message)
+      if (err instanceof ChatError && err.kind === 'no_tab') return refuse(503, 'api_error', err.message)
+      rlog.error(err)
       const api = tabError(err.message)
       sendApiError(res, api.type === 'invalid_request_error' ? 400 : 502, api.type, api.message)
     }

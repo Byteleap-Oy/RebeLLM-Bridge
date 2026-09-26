@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { estimateTokens } from './anthropic/map.js'
 import { HttpError, clientGone, pathOf, readJson, sendJson } from './http.js'
 import type { ChatMessage, ToolCall, ToolSchema, Usage } from './protocol.js'
+import { requestLog, type LogLine, type RequestLog } from './reqlog.js'
 import { ChatError, type ChatInput, type ChatResult, type TabLink } from './tab.js'
 
 /** Well inside the read timeouts of common clients (Node's fetch: 300 s). */
@@ -11,6 +13,8 @@ export interface RouteOptions {
   /** How long a request waits for a tab with a ready model. */
   waitMs: number
   keepAliveMs?: number
+  /** Request lines; none without it. */
+  log?: LogLine
 }
 
 type Obj = Record<string, unknown>
@@ -182,18 +186,33 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
     }
     const parsed = toChatInput(body)
     if ('error' in parsed) return sendError(res, 400, parsed.error, 'invalid_request_error')
+    const id = `chatcmpl-${newId()}`
+    const rlog = requestLog(o.log, '/v1/chat/completions', id)
+    rlog.arrived(estimateTokens(parsed.input), parsed.input.tools?.length ?? 0)
     const gone = clientGone(res)
     const missing = await tab.waitReady(o.waitMs, gone)
-    if (gone.aborted) return
-    if (missing) return sendError(res, 503, missing.message, 'service_unavailable', missing.code)
-    const meta = { id: `chatcmpl-${newId()}`, created: Math.floor(Date.now() / 1000), model: tab.modelName }
-    if (parsed.stream) return stream(res, parsed.input, parsed.includeUsage, meta, gone)
+    if (gone.aborted) return rlog.aborted()
+    if (missing) {
+      rlog.refused(503, missing.message)
+      return sendError(res, 503, missing.message, 'service_unavailable', missing.code)
+    }
+    const meta = { id, created: Math.floor(Date.now() / 1000), model: tab.modelName }
+    if (parsed.stream) return stream(res, parsed.input, parsed.includeUsage, meta, gone, rlog)
     try {
-      sendJson(res, 200, completion(await tab.chat(parsed.input, { signal: gone }), meta))
+      const r = await tab.chat(parsed.input, {
+        signal: gone,
+        onEvent: (e) => (e.t === 'queued' ? rlog.queued(e.position) : rlog.firstToken()),
+      })
+      rlog.done(finishReason(r), r.usage.completion)
+      sendJson(res, 200, completion(r, meta))
     } catch (e) {
-      if (gone.aborted) return
+      if (gone.aborted) return rlog.aborted()
       const err = e as ChatError
-      if (err.kind === 'no_tab') return sendError(res, 503, err.message, 'service_unavailable', 'no_tab')
+      if (err.kind === 'no_tab') {
+        rlog.refused(503, err.message)
+        return sendError(res, 503, err.message, 'service_unavailable', 'no_tab')
+      }
+      rlog.error(err)
       sendError(res, 502, err.message, 'api_error', err.kind === 'disconnected' ? 'tab_disconnected' : 'tab_error')
     }
   }
@@ -204,6 +223,7 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
     includeUsage: boolean,
     meta: { id: string; created: number; model: string },
     signal: AbortSignal,
+    rlog: RequestLog,
   ) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' })
     res.socket?.setNoDelay(true)
@@ -218,18 +238,22 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
       const r = await tab.chat(input, {
         signal,
         onEvent: (e) => {
+          if (e.t === 'queued') return rlog.queued(e.position)
+          rlog.firstToken()
           if (e.t === 'token') chunk({ content: e.text })
-          else if (e.t === 'tool_call') {
+          else {
             chunk({ tool_calls: e.calls.map((c, i) => ({ index: calls + i, ...toolCall(c) })) })
             calls += e.calls.length
           }
         },
       })
+      rlog.done(finishReason(r), r.usage.completion)
       chunk({}, finishReason(r))
       if (includeUsage) write({ ...meta, object: 'chat.completion.chunk', choices: [], usage: usage(r.usage) })
       res.end('data: [DONE]\n\n')
     } catch (e) {
-      if (signal.aborted) return
+      if (signal.aborted) return rlog.aborted()
+      rlog.error(e)
       // OpenAI's SDKs raise an error for a data chunk that carries one.
       write({ error: { message: (e as Error).message, type: 'api_error', code: null } })
       res.end()

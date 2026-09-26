@@ -16,6 +16,8 @@ export interface ServerOptions {
   waitMs: number
   keepAliveMs?: number
   log?: (line: string) => void
+  /** Where request lines go; `log` when absent. */
+  requestLog?: (line: string) => void
   pingMs?: number
   silenceMs?: number
 }
@@ -45,8 +47,9 @@ export async function startServer(o: ServerOptions): Promise<BridgeServer> {
     ...(o.pingMs ? { pingMs: o.pingMs } : {}),
     ...(o.silenceMs ? { silenceMs: o.silenceMs } : {}),
   })
-  const routes = openaiRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { keepAliveMs: o.keepAliveMs } : {}) })
-  const messages = messagesRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { pingMs: o.keepAliveMs } : {}) })
+  const log = o.requestLog ?? o.log
+  const routes = openaiRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { keepAliveMs: o.keepAliveMs } : {}), log })
+  const messages = messagesRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { pingMs: o.keepAliveMs } : {}), log })
   // On loopback, a foreign Host means a DNS-rebinding page; bound wider, the user chose it.
   const strictHost = isLoopback(o.host)
   const hostOk = (req: IncomingMessage) =>
