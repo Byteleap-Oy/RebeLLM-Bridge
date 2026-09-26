@@ -128,8 +128,11 @@ export function bridgeEnv(base: string, contextTokens?: number): Record<string, 
     ANTHROPIC_MODEL: MODEL,
     ANTHROPIC_SMALL_FAST_MODEL: MODEL,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: MODEL,
-    // A local model can take minutes before its first token.
-    API_TIMEOUT_MS: '600000',
+    // A 32k prefill at 26 tok/s is 21 minutes and a long answer at 1.5 tok/s hours; the
+    // bridge's pings keep the idle watchdogs quiet, these keep the request and subagent alive.
+    API_TIMEOUT_MS: '21600000',
+    CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS: '21600000',
+    CLAUDE_STREAM_IDLE_TIMEOUT_MS: '1800000',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     // Claude Code assumes 200k for a model it does not know; it should compact within the tab's.
     ...(contextTokens ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextTokens) } : {}),

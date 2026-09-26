@@ -63,7 +63,9 @@ It reuses a running bridge or starts one, waits for the tab, sets the tab's cont
 and a long request timeout, and passes every other argument to `claude`. Options:
 `--claude <path>`, `--shared-config` (use your normal Claude Code config), `--port <n>`.
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
-with a 32k context and patience on a slow GPU.
+with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request
+and subagent timeouts to hours, so a subagent that shows nothing for twenty minutes is
+prefilling, not stuck (the Bridge log in the tab shows it).
 
 On a work machine Claude Code may be pinned to the company's endpoint or cloud provider.
 The launcher blanks `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_USE_*`

@@ -10,13 +10,15 @@ does not own (`--claude <path>`, `--shared-config`, `--port <n>`), return `claud
 code, and give the child an environment that sends every model request to the bridge:
 `ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL` set,
-`API_TIMEOUT_MS` raised, non-essential traffic disabled, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
-set to the tab's context size when the tab reports one, and `ANTHROPIC_API_KEY`,
-`ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and
-`CLAUDE_CODE_USE_FOUNDRY` blanked, so nothing from the shell outranks the bridge. The same
-variables SHALL reach `claude` as `--settings <file>` from a file the launcher writes at
-`~/.rebellm-bridge/claude-settings.json`, placed before the user's arguments, so a project's
-or local `.claude/settings.json` does not outrank them either.
+`API_TIMEOUT_MS` and `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` raised to six hours and
+`CLAUDE_STREAM_IDLE_TIMEOUT_MS` to thirty minutes, non-essential traffic disabled,
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` set to the tab's context size when the tab reports one, and
+`ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` blanked, so nothing from the shell
+outranks the bridge. The same variables SHALL reach `claude` as `--settings <file>` from a
+file the launcher writes at `~/.rebellm-bridge/claude-settings.json`, placed before the
+user's arguments, so a project's or local `.claude/settings.json` does not outrank them
+either.
 
 #### Scenario: Context size
 
@@ -37,6 +39,11 @@ or local `.claude/settings.json` does not outrank them either.
 
 - **WHEN** the shell exports `CLAUDE_CODE_USE_VERTEX=1` and the project's `.claude/settings.json` sets `ANTHROPIC_BASE_URL`
 - **THEN** the child sees `CLAUDE_CODE_USE_VERTEX` empty and the `--settings` file sets `ANTHROPIC_BASE_URL` to the bridge, above the project's value
+
+#### Scenario: Slow subagent
+
+- **WHEN** a subagent's first request takes 20 minutes before its first token
+- **THEN** `claude` waits, because its stall and request timeouts are hours and the bridge's pings keep the stream alive
 
 ### Requirement: Isolated config
 
