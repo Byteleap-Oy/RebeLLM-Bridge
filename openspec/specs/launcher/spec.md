@@ -49,7 +49,9 @@ either.
 
 The launcher SHALL set `CLAUDE_CONFIG_DIR` to `~/.rebellm-bridge/claude`, so login, history
 and settings stay apart from the user's normal Claude Code, unless `--shared-config` is
-given; the bridge variables travel with `--settings` in both cases.
+given; the bridge variables travel with `--settings` in both cases, and that file SHALL also
+turn off Claude Code's extra model calls: the recap on return (`awaySummaryEnabled`), prompt
+suggestions (`promptSuggestionEnabled`) and thinking summaries (`showThinkingSummaries`).
 
 #### Scenario: Default
 
@@ -60,6 +62,11 @@ given; the bridge variables travel with `--settings` in both cases.
 
 - **WHEN** the user runs `rebellm-claude --shared-config`
 - **THEN** the child inherits the parent's `CLAUDE_CONFIG_DIR` or none, and still gets `--settings <file>`
+
+#### Scenario: Quiet
+
+- **WHEN** the launcher writes its settings file
+- **THEN** it sets `awaySummaryEnabled`, `promptSuggestionEnabled` and `showThinkingSummaries` to false beside the environment block
 
 ### Requirement: Bridge lifecycle
 

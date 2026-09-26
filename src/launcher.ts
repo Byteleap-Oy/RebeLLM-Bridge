@@ -160,9 +160,16 @@ export const launchSettingsFile = (home: string) => join(home, '.rebellm-bridge'
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
 
+/** Claude Code's extra model calls, minutes each on a slow model: the recap on return, prompt suggestions, thinking summaries. */
+export const QUIET_SETTINGS = {
+  awaySummaryEnabled: false,
+  promptSuggestionEnabled: false,
+  showThinkingSummaries: false,
+} as const
+
 export function writeLaunchSettings(file: string, env: Record<string, string>): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, `${JSON.stringify({ env }, null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(file, `${JSON.stringify({ ...QUIET_SETTINGS, env }, null, 2)}\n`, { mode: 0o600 })
 }
 
 /** Where an organisation's Claude Code settings live; they rank above everything the launcher can do. */

@@ -8,6 +8,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { tokenFile } from './cli.js'
 import {
   MISSING,
+  QUIET_SETTINGS,
   bridgeEnv,
   childEnv,
   configDir,
@@ -167,7 +168,12 @@ describe('environment and settings', () => {
     const home = temp()
     const file = launchSettingsFile(home)
     writeLaunchSettings(file, { A: '1' })
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ env: { A: '1' } })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...QUIET_SETTINGS, env: { A: '1' } })
+    expect(QUIET_SETTINGS).toEqual({
+      awaySummaryEnabled: false,
+      promptSuggestionEnabled: false,
+      showThinkingSummaries: false,
+    })
     expect(managedSettingsFile('darwin', {})).toBe('/Library/Application Support/ClaudeCode/managed-settings.json')
     expect(managedSettingsFile('win32', { programfiles: 'D:\\PF' })).toBe(
       join('D:\\PF', 'ClaudeCode', 'managed-settings.json'),
@@ -223,7 +229,10 @@ describe('launch', () => {
     expect(err.text()).toContain(`settings in ${managed} set ANTHROPIC_BASE_URL, apiKeyHelper; they rank above`)
     expect(existsSync(logFile(home))).toBe(false)
     expect(existsSync(join(configDir(home), 'settings.json'))).toBe(false)
-    expect(JSON.parse(readFileSync(launchSettingsFile(home), 'utf8'))).toEqual({ env: bridgeEnv(b.base, 32768) })
+    expect(JSON.parse(readFileSync(launchSettingsFile(home), 'utf8'))).toEqual({
+      ...QUIET_SETTINGS,
+      env: bridgeEnv(b.base, 32768),
+    })
     expect((await fetch(`${b.base}/health`)).status).toBe(200)
   })
 
