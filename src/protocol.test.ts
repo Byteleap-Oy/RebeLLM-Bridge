@@ -1,28 +1,51 @@
 import { describe, expect, it } from 'vitest'
 import { PROTOCOL_VERSION, encode, parseTabMessage } from './protocol.js'
 
+const parse = (o: unknown) => parseTabMessage(JSON.stringify(o))
+
 describe('protocol v1', () => {
+  const hello = { t: 'hello', v: PROTOCOL_VERSION, token: 'x', model: 'm', contextTokens: 32768, app: '0.0.1' }
+
   it('parses the tab messages and rejects the rest', () => {
-    const hello = {
-      t: 'hello',
-      v: PROTOCOL_VERSION,
-      token: 'x',
-      model: 'qwen3.6-35b-a3b',
-      contextTokens: 32768,
-      app: '0.0.1',
-    }
-    expect(parseTabMessage(JSON.stringify(hello))).toEqual(hello)
-    expect(parseTabMessage(JSON.stringify({ t: 'token', id: '1', text: 'Hi' }))).toEqual({
-      t: 'token',
-      id: '1',
-      text: 'Hi',
-    })
-    // A hello of another version or without a token is not a v1 hello.
-    expect(parseTabMessage(JSON.stringify({ ...hello, v: 2 }))).toBeNull()
-    expect(parseTabMessage(JSON.stringify({ t: 'hello', v: 1 }))).toBeNull()
+    expect(parse(hello)).toEqual(hello)
+    expect(parse({ t: 'token', id: '1', text: 'Hi' })).toEqual({ t: 'token', id: '1', text: 'Hi' })
     expect(parseTabMessage('{"t":"nope"}')).toBeNull()
     expect(parseTabMessage('not json')).toBeNull()
     expect(parseTabMessage('42')).toBeNull()
+    expect(parseTabMessage('[]')).toBeNull()
+  })
+
+  it('parses a hello of another version so the bridge can answer it, but not one without a token', () => {
+    expect(parse({ ...hello, v: 2 })).toMatchObject({ t: 'hello', v: 2 })
+    expect(parse({ t: 'hello', v: 1 })).toBeNull()
+    expect(parse({ ...hello, v: '1' })).toBeNull()
+    // A tab without a loaded model may leave the model fields out.
+    expect(parse({ t: 'hello', v: 1, token: 'x' })).toEqual({
+      t: 'hello',
+      v: 1,
+      token: 'x',
+      model: '',
+      contextTokens: 0,
+      app: '',
+    })
+  })
+
+  it('checks the fields of each frame type', () => {
+    const usage = { prompt: 3, completion: 2, tokensPerSec: 10.5 }
+    const call = { id: 'a-call-1', function: { name: 'f', arguments: { x: 1 } } }
+    expect(parse({ t: 'done', id: 'a', stop: 'eos', usage })).not.toBeNull()
+    expect(parse({ t: 'done', id: 'a', stop: 'weird', usage })).toBeNull()
+    expect(parse({ t: 'done', id: 'a', stop: 'eos' })).toBeNull()
+    expect(parse({ t: 'tool_call', id: 'a', calls: [call] })).not.toBeNull()
+    expect(parse({ t: 'tool_call', id: 'a', calls: [{ function: { name: 'f', arguments: '{}' } }] })).toBeNull()
+    expect(parse({ t: 'token', id: 'a', text: 5 })).toBeNull()
+    expect(parse({ t: 'token', text: 'x' })).toBeNull()
+    expect(parse({ t: 'error', message: 'no id is fine' })).not.toBeNull()
+    expect(parse({ t: 'error', id: 'a' })).toBeNull()
+    expect(parse({ t: 'queued', id: 'a', position: 1 })).not.toBeNull()
+    expect(parse({ t: 'status', state: 'ready', model: 'm' })).not.toBeNull()
+    expect(parse({ t: 'status', state: 'asleep' })).toBeNull()
+    expect(parse({ t: 'ping' })).toEqual({ t: 'ping' })
   })
 
   it('encodes bridge messages as JSON', () => {
