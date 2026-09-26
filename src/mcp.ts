@@ -103,7 +103,7 @@ export function httpBackend(base: string): ChatBackend {
 export function describeHealth(h: Health): string {
   if (!h.tab)
     return (
-      'No RebeLLM tab is connected. In RebeLLM → Settings → Local bridge, paste the bridge token ' +
+      'No RebeLLM tab is connected. In RebeLLM → Bridge, paste the bridge token ' +
       '(printed at its first start, stored in ~/.rebellm-bridge/token) and turn the switch on.'
     )
   const tab = `A RebeLLM tab is connected${h.app ? ` (app ${h.app})` : ''}.`

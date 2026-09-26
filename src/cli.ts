@@ -154,7 +154,7 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
   if (tok.created)
     say(
       `\nNew bridge token (stored in ${tok.file}):\n\n  ${tok.token}\n\n` +
-        'Paste it into RebeLLM → Settings → Local bridge and turn the switch on. It is printed only this once.\n',
+        'Paste it into RebeLLM → Bridge and turn the switch on. It is printed only this once.\n',
     )
   const warning = hostWarning(o.host)
   if (warning) log(warning)
@@ -178,7 +178,7 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
   if (server) {
     const where = `${urlHost(o.host)}:${server.port}`
     log(`${VERSION} listening on ${where}`)
-    say(`  tab:    ws://${where}  (RebeLLM → Settings → Local bridge)`)
+    say(`  tab:    ws://${where}  (RebeLLM → Bridge)`)
     say(`  OpenAI: http://${where}/v1`)
     say(`  Claude: http://${where}  (Anthropic API; rebellm-claude runs Claude Code on it)`)
     say(

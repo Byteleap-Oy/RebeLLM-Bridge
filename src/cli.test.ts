@@ -101,7 +101,7 @@ describe('run', () => {
     const token = readFileSync(tokenFile(t.io.home), 'utf8').trim()
     const port = running.server!.port
     expect(t.out.text()).toContain(`\n  ${token}\n`)
-    expect(t.out.text()).toContain('Paste it into RebeLLM → Settings → Local bridge and turn the switch on.')
+    expect(t.out.text()).toContain('Paste it into RebeLLM → Bridge and turn the switch on.')
     expect(t.out.text()).toContain(`  tab:    ws://127.0.0.1:${port}`)
     expect(t.out.text()).toContain(`  OpenAI: http://127.0.0.1:${port}/v1`)
     expect(t.out.text()).toContain(

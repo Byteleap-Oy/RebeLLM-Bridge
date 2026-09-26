@@ -21,7 +21,7 @@ npm install -g rebellm-bridge     # or run it once with: npx rebellm-bridge
 
 1. `rebellm-bridge` — the first start prints a token once and keeps it in
    `~/.rebellm-bridge/token` (`cat` it to see it again, delete it for a new one).
-2. In RebeLLM: Settings → Local bridge → paste the token, switch on, Save. The card reads
+2. In RebeLLM: Bridge (top of the page) → paste the token, Save, switch on. The sidebar reads
    "Connected to 127.0.0.1:7343". The model must be loaded in that tab.
 3. Check: `curl http://127.0.0.1:7343/health` → `{"tab":true,"state":"ready",...}`.
 

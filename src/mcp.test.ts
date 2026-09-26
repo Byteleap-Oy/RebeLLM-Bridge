@@ -112,7 +112,7 @@ describe('MCP server', () => {
 
 describe('describeHealth', () => {
   it('covers every state, and never the token', () => {
-    expect(describeHealth({ tab: false, state: 'none' })).toContain('Settings → Local bridge')
+    expect(describeHealth({ tab: false, state: 'none' })).toContain('RebeLLM → Bridge')
     expect(describeHealth({ tab: true, state: 'loading', detail: 'shards 2/9' })).toBe(
       'A RebeLLM tab is connected. The model is loading (shards 2/9).',
     )

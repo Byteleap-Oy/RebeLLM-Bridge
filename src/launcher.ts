@@ -263,7 +263,7 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
 
     if (!health?.tab) {
       say(
-        `waiting for the RebeLLM tab. In RebeLLM → Settings → Local bridge, connect to ` +
+        `waiting for the RebeLLM tab. In RebeLLM → Bridge, connect to ` +
           `${base.replace('http:', 'ws:')} with ${token}\nCtrl+C quits.`,
       )
       while (!health?.tab) {
