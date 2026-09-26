@@ -4,3 +4,4 @@ dist/
 openspec/changes/archive/
 .claude/settings.local.json
 *.log
+publish.ps1
