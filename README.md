@@ -1,21 +1,24 @@
 # RebeLLM Bridge
 
 Use the model running in your [RebeLLM](https://rebellm.ai) browser tab from tools on the
-same machine: Claude Code and other MCP clients, and anything that speaks the OpenAI chat
-API. The bridge is a small local service; the tab connects to it and does the work. The
-bridge never runs a model and never sees your RebeLLM identity.
+same machine: run Claude Code on it, call it from Claude Code and other MCP clients, or use
+it from anything that speaks the Anthropic Messages API or the OpenAI chat API. The bridge
+is a small local service; the tab connects to it and does the work. The bridge never runs a
+model and never sees your RebeLLM identity.
 
 ## How it fits
 
 ```
-Claude Code ──MCP (stdio)──▶ rebellm-bridge ◀──WebSocket (ws://127.0.0.1:7343)── RebeLLM tab
-curl / any OpenAI client ──HTTP /v1/chat/completions──▶      (model runs here, in the browser)
+Claude Code (rebellm-claude) ──HTTP /v1/messages────────────▶ rebellm-bridge ◀──WebSocket── RebeLLM tab
+Claude Code (MCP tool) ────────MCP (stdio)──────────────────▶ 127.0.0.1:7343               (the model
+curl / any OpenAI client ──────HTTP /v1/chat/completions────▶                               runs here)
 ```
 
-1. `npx rebellm-bridge` prints a token and listens on `127.0.0.1:7343`.
+1. `rebellm-claude` (or `rebellm-bridge` on its own) starts the bridge on `127.0.0.1:7343`
+   and prints a token the first time.
 2. In RebeLLM → Settings → Local bridge: paste the token, turn the switch on.
-3. Add the bridge to Claude Code as an MCP server, or point an OpenAI client at
-   `http://127.0.0.1:7343/v1`.
+3. Claude Code starts on the tab's model. Or add the bridge to Claude Code as an MCP server,
+   or point an Anthropic or OpenAI client at `http://127.0.0.1:7343`.
 
 ## Install and first start
 
@@ -25,8 +28,10 @@ Node 22 or later. Run it without installing:
 npx rebellm-bridge
 ```
 
-or install it once with `npm install -g rebellm-bridge` and run `rebellm-bridge`. From a
-clone: `npm install && npm run build && node dist/cli.js`.
+or install it once with `npm install -g rebellm-bridge`, which gives you `rebellm-bridge`
+and `rebellm-claude`. Without installing, `npx -p rebellm-bridge rebellm-claude` runs the
+launcher. From a clone: `npm install && npm run build && node dist/cli.js` (and
+`node dist/launcher.js`).
 
 The first start creates a random token, stores it in `~/.rebellm-bridge/token` (owner-only
 permissions; on Windows the file is protected by your user profile) and prints it once:
@@ -51,13 +56,75 @@ and the Settings card reads "Connected to 127.0.0.1:7343".
 | `--wait <s>`    | `120`                        | how long a request waits for the tab and a ready model     |
 | `--mcp`         | off                          | also serve MCP over stdio (Claude Code starts it this way) |
 
-## Claude Code
+## Claude Code on the tab's model
+
+```
+rebellm-claude
+rebellm-claude -p "What is 2 + 3?"
+```
+
+`rebellm-claude` runs [Claude Code](https://claude.com/claude-code) with the model in your
+RebeLLM tab as its model, for its main loop and its small helper requests alike:
+
+- It uses the bridge already running on the port, or starts one in the same process
+  (logging to `~/.rebellm-bridge/bridge.log`, since Claude Code owns the terminal) and stops
+  it when Claude Code exits.
+- Until a tab is connected it waits and says where to connect it (the token too, when this
+  start created it). Ctrl+C quits.
+- It starts `claude` with the bridge's address, a placeholder API key, the model name
+  `rebellm`, the tab's context size (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so Claude Code
+  compacts in time) and a longer request timeout, and removes any `ANTHROPIC_API_KEY` from
+  its environment, so your key never reaches the bridge. Every argument it does not own goes
+  to `claude` (after `--`, all of them do), and it exits with `claude`'s exit code. Claude
+  Code notes the model name it does not know on stderr
+  (`[claude-code:unrecognized_model]`); that is expected.
+
+| Option            | Default            | Meaning                                               |
+| ----------------- | ------------------ | ----------------------------------------------------- |
+| `--claude <path>` | `claude` on `PATH` | the Claude Code executable                            |
+| `--shared-config` | off                | use your normal Claude Code config instead of its own |
+| `--port <n>`      | `7343`             | the bridge's port; a bridge already there is reused   |
+
+**Its own config.** Claude Code runs with `CLAUDE_CONFIG_DIR=~/.rebellm-bridge/claude`,
+whose `settings.json` the launcher points at the bridge. Your claude.ai login, your
+`/resume` history with Claude and your settings stay untouched, and the local model's
+sessions stay apart from them. The price: your user-level settings, MCP servers and
+`~/.claude/CLAUDE.md` are not loaded there (the project's `.claude/` and `CLAUDE.md` are),
+and the first interactive start may ask Claude Code's first-run questions. `--shared-config`
+uses your normal config instead, with the same environment on top.
+
+**By hand.** Any Claude Code, or any Anthropic client, works with the bridge running:
+
+```
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7343
+export ANTHROPIC_AUTH_TOKEN=unused      # the bridge checks no key
+export ANTHROPIC_MODEL=rebellm ANTHROPIC_DEFAULT_HAIKU_MODEL=rebellm
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768   # the tab's context, as /health reports it
+export API_TIMEOUT_MS=600000                  # a local model can take minutes
+claude
+```
+
+(PowerShell: `$env:ANTHROPIC_BASE_URL = 'http://127.0.0.1:7343'` and so on.) Leave
+`ANTHROPIC_API_KEY` unset, or your real key goes to the bridge and Claude Code prefers it.
+
+**Context size.** Every Claude Code request carries its whole system prompt and tool
+definitions before any conversation: a first `-p` request from Claude Code 2.1.283 was
+about 49,000 characters, over half of them its 14 tool definitions, or about 14k tokens by
+the bridge's estimate. The app's default model has a context of 32768 tokens, so that
+leaves room for a short session; the tab must also read the whole prompt before its first
+token, which takes a while on a slow GPU. When a request does not fit, the bridge answers
+`prompt is too long: N tokens > M maximum`, and `/compact` or `/clear` makes room. How well
+Claude Code works depends on how well the tab's model uses tools; the model answers every
+model name Claude Code asks for.
+
+## Claude Code with the model as a tool
 
 ```
 claude mcp add rebellm -- npx rebellm-bridge --mcp
 ```
 
-Claude Code then starts the bridge itself, and it offers two tools:
+Here Claude keeps its own model and can ask the tab's model through two tools; Claude Code
+starts the bridge itself:
 
 - `chat`: `messages` (`system`/`user`/`assistant`), optional `max_tokens` and
   `temperature`; returns the model's answer. While the answer streams, Claude Code gets
@@ -69,6 +136,45 @@ session's), `--mcp` uses that one instead of failing, so every client shares the
 `--mcp` mode everything the bridge prints goes to stderr, so if Claude Code started it
 first, read the token from `~/.rebellm-bridge/token`. A local model can take minutes on a
 long answer; if Claude Code gives up first, raise `MCP_TOOL_TIMEOUT` (milliseconds).
+
+## Anthropic Messages API
+
+```
+curl http://127.0.0.1:7343/v1/messages \
+  -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"rebellm","max_tokens":100,"messages":[{"role":"user","content":"Name the capital of Finland in one word."}]}'
+```
+
+Anthropic's SDKs work with the base URL `http://127.0.0.1:7343` and any API key:
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(base_url="http://127.0.0.1:7343", api_key="unused")
+with client.messages.stream(
+    model="rebellm",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Say hello."}],
+) as stream:
+    print(stream.get_final_message().content[0].text)
+```
+
+- `POST /v1/messages`: with and without `stream`. `system` (a string or text blocks), text,
+  `tool_use` and `tool_result` blocks, custom `tools` (they come back as `tool_use` blocks
+  with `stop_reason: "tool_use"`; `tool_choice: {"type": "none"}` sends none),
+  `max_tokens`, `temperature` and `stop_sequences` (matched by the bridge, which then stops
+  the tab) are used. `model` is ignored and answered with the tab's model; image and
+  document blocks become `[image omitted]` / `[document omitted]`; thinking blocks, server
+  tools and other fields are dropped. A stream follows the API's event order and sends a
+  `ping` event every 10 s while it waits for the model.
+- `POST /v1/messages/count_tokens`: `{ input_tokens }`, an estimate (`ceil(chars / 3.5)` over
+  the system prompt, messages and tools; the bridge has no tokenizer). It needs no tab.
+- Errors use Anthropic's shape `{ type: "error", error: { type, message } }`: 503
+  `api_error` after the wait with the same reasons as below; 400 `invalid_request_error` for
+  a body that is not a Messages request, and `prompt is too long: N tokens > M maximum` when
+  the prompt does not fit the tab's context (by the estimate, or as the tab reports it);
+  502 `api_error` when the tab fails or disconnects; mid-stream, an `error` event ends the
+  stream.
 
 ## OpenAI-style HTTP API
 
@@ -109,10 +215,13 @@ print(reply.choices[0].message.content)
   `model unavailable: <why>` (`model_unavailable`); 502 when the tab fails the chat or
   disconnects during it; 400 for a body that is not a chat request.
 
-The HTTP API has no token: it listens on loopback only, so it is open to every program on
-this machine but not to the network. Requests from web pages (with an `Origin` header) and
-with a `Host` other than `127.0.0.1`, `localhost` or `[::1]` get 403, so a site in your
-browser cannot use your model. The tab's WebSocket needs the token.
+## Who can use it
+
+Neither HTTP API checks a key: the bridge listens on loopback only, so it is open to every
+program on this machine but not to the network. Requests from web pages (with an `Origin`
+header) and with a `Host` other than `127.0.0.1`, `localhost` or `[::1]` get 403 (in each
+API's own error shape), so a site in your browser cannot use your model. The tab's WebSocket
+needs the token.
 
 ## Protocol v1 (tab ↔ bridge)
 
