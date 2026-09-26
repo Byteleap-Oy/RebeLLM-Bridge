@@ -11,7 +11,12 @@ code, and give the child an environment that sends every model request to the br
 `ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL` set,
 `API_TIMEOUT_MS` raised, non-essential traffic disabled, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
-set to the tab's context size when the tab reports one, and `ANTHROPIC_API_KEY` removed.
+set to the tab's context size when the tab reports one, and `ANTHROPIC_API_KEY`,
+`ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and
+`CLAUDE_CODE_USE_FOUNDRY` blanked, so nothing from the shell outranks the bridge. The same
+variables SHALL reach `claude` as `--settings <file>` from a file the launcher writes at
+`~/.rebellm-bridge/claude-settings.json`, placed before the user's arguments, so a project's
+or local `.claude/settings.json` does not outrank them either.
 
 #### Scenario: Context size
 
@@ -21,29 +26,33 @@ set to the tab's context size when the tab reports one, and `ANTHROPIC_API_KEY` 
 #### Scenario: Arguments pass through
 
 - **WHEN** the user runs `rebellm-claude -p "What is 2 + 3?"`
-- **THEN** `claude` is started with `-p` and `What is 2 + 3?` and the bridge environment
+- **THEN** `claude` is started with `--settings <file>`, `-p` and `What is 2 + 3?` and the bridge environment
 
 #### Scenario: Exit code
 
 - **WHEN** `claude` exits with code 2
 - **THEN** `rebellm-claude` exits with code 2
 
+#### Scenario: Workplace shell and project
+
+- **WHEN** the shell exports `CLAUDE_CODE_USE_VERTEX=1` and the project's `.claude/settings.json` sets `ANTHROPIC_BASE_URL`
+- **THEN** the child sees `CLAUDE_CODE_USE_VERTEX` empty and the `--settings` file sets `ANTHROPIC_BASE_URL` to the bridge, above the project's value
+
 ### Requirement: Isolated config
 
-The launcher SHALL set `CLAUDE_CONFIG_DIR` to `~/.rebellm-bridge/claude` and write the
-bridge variables into that directory's `settings.json` under `env`, keeping the file's
-other content, so login, history and settings stay apart from the user's normal Claude
-Code, unless `--shared-config` is given.
+The launcher SHALL set `CLAUDE_CONFIG_DIR` to `~/.rebellm-bridge/claude`, so login, history
+and settings stay apart from the user's normal Claude Code, unless `--shared-config` is
+given; the bridge variables travel with `--settings` in both cases.
 
 #### Scenario: Default
 
 - **WHEN** the user runs `rebellm-claude`
-- **THEN** the child's `CLAUDE_CONFIG_DIR` is `~/.rebellm-bridge/claude` and its `settings.json` sets `ANTHROPIC_BASE_URL` to the bridge
+- **THEN** the child's `CLAUDE_CONFIG_DIR` is `~/.rebellm-bridge/claude`
 
 #### Scenario: Shared config
 
 - **WHEN** the user runs `rebellm-claude --shared-config`
-- **THEN** the child inherits the parent's `CLAUDE_CONFIG_DIR` or none, and no settings file is written
+- **THEN** the child inherits the parent's `CLAUDE_CONFIG_DIR` or none, and still gets `--settings <file>`
 
 ### Requirement: Bridge lifecycle
 
@@ -82,4 +91,34 @@ exist.
 
 - **WHEN** `claude` cannot be found
 - **THEN** the launcher prints how to install Claude Code and exits with code 1
+
+### Requirement: Launcher as a subcommand
+
+`rebellm-bridge claude [arguments]` SHALL do what `rebellm-claude [arguments]` does, so the
+launcher runs with `npx rebellm-bridge claude` and nothing installed.
+
+#### Scenario: Through npx
+
+- **WHEN** the user runs `npx rebellm-bridge claude -p "What is 2 + 3?"`
+- **THEN** the launcher runs as `rebellm-claude -p "What is 2 + 3?"` would
+
+### Requirement: Managed settings notice
+
+Before starting `claude`, the launcher SHALL read the machine's managed Claude Code settings
+file (`/Library/Application Support/ClaudeCode/managed-settings.json` on macOS,
+`%ProgramFiles%\ClaudeCode\managed-settings.json` on Windows,
+`/etc/claude-code/managed-settings.json` elsewhere) and, when it sets an `env` variable
+starting with `ANTHROPIC_` or `CLAUDE_CODE_USE_`, `apiKeyHelper`, `forceLoginMethod` or
+`forceLoginGatewayUrl`, SHALL name the file and those keys and say that they rank above
+the launcher. A missing or unreadable file SHALL be silent.
+
+#### Scenario: Organisation pins the endpoint
+
+- **WHEN** the managed settings file sets `env.ANTHROPIC_BASE_URL`
+- **THEN** the launcher prints the file's path and `ANTHROPIC_BASE_URL` before starting `claude`
+
+#### Scenario: No managed settings
+
+- **WHEN** the file does not exist
+- **THEN** the launcher prints nothing about it
 

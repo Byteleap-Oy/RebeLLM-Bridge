@@ -108,9 +108,20 @@ export function findCommand(name: string, env: NodeJS.ProcessEnv, platform = pro
   return null
 }
 
+/** What Claude Code ranks above `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL`, or would send along. */
+const OUTRANKING = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+]
+
 /** What sends every model request of claude to the bridge. */
 export function bridgeEnv(base: string, contextTokens?: number): Record<string, string> {
   return {
+    // Empty counts as unset; a value from a shell profile or a settings file would outrank the bridge.
+    ...Object.fromEntries(OUTRANKING.map((k) => [k, ''])),
     ANTHROPIC_BASE_URL: base,
     // The bridge checks no key; a Bearer token needs no approval prompt in Claude Code.
     ANTHROPIC_AUTH_TOKEN: 'rebellm-bridge-needs-no-key',
@@ -125,14 +136,14 @@ export function bridgeEnv(base: string, contextTokens?: number): Record<string, 
   }
 }
 
-/** The parent's environment with the bridge's on top; a real API key is removed, never sent to the bridge. */
+/** The parent's environment with the bridge's on top; a real key or provider never reaches claude. */
 export function childEnv(
   parent: NodeJS.ProcessEnv,
   ours: Record<string, string>,
   platform = process.platform,
 ): NodeJS.ProcessEnv {
   const win = platform === 'win32'
-  const drop = new Set(['ANTHROPIC_API_KEY', ...Object.keys(ours)])
+  const drop = new Set(Object.keys(ours))
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(parent)) if (!drop.has(win ? k.toUpperCase() : k)) env[k] = v
   return { ...env, ...ours }
@@ -140,31 +151,49 @@ export function childEnv(
 
 export const configDir = (home: string) => join(home, '.rebellm-bridge', 'claude')
 export const logFile = (home: string) => join(home, '.rebellm-bridge', 'bridge.log')
+/** Given to claude as `--settings`, which ranks above project, local and user settings. */
+export const launchSettingsFile = (home: string) => join(home, '.rebellm-bridge', 'claude-settings.json')
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
 
-/** Puts `env` into the config dir's `settings.json`, keeping the rest; a warning when it cannot. */
-export function writeSettings(dir: string, env: Record<string, string>): string | null {
-  const file = join(dir, 'settings.json')
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
-  let settings: Obj = {}
+export function writeLaunchSettings(file: string, env: Record<string, string>): void {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, `${JSON.stringify({ env }, null, 2)}\n`, { mode: 0o600 })
+}
+
+/** Where an organisation's Claude Code settings live; they rank above everything the launcher can do. */
+export function managedSettingsFile(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
+  if (platform === 'darwin') return '/Library/Application Support/ClaudeCode/managed-settings.json'
+  if (platform === 'win32')
+    return join(env[envKey(env, 'PROGRAMFILES', true)] ?? 'C:\\Program Files', 'ClaudeCode', 'managed-settings.json')
+  return '/etc/claude-code/managed-settings.json'
+}
+
+const MANAGED_KEYS = ['apiKeyHelper', 'forceLoginMethod', 'forceLoginGatewayUrl']
+
+/** The keys of a managed settings file that decide where claude sends requests; none without such a file. */
+export function managedOverrides(file: string): string[] {
+  let settings: unknown
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
-    if (!isObj(parsed)) return `${file} is not a JSON object; left it as it is`
-    settings = parsed
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return `could not read ${file}; left it as it is`
+    settings = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return []
   }
-  settings.env = { ...(isObj(settings.env) ? settings.env : {}), ...env }
-  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
-  return null
+  if (!isObj(settings)) return []
+  const env = isObj(settings.env) ? Object.keys(settings.env) : []
+  return [
+    ...env.filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_USE_)/.test(k)),
+    ...MANAGED_KEYS.filter((k) => settings[k] !== undefined),
+  ]
 }
 
 export interface LaunchIo {
   stderr: Writable
   env: NodeJS.ProcessEnv
   home?: string
+  /** The managed settings file to look at, for tests. */
+  managedFile?: string
   /** How often to ask the bridge whether the tab is there. */
   pollMs?: number
   platform?: NodeJS.Platform
@@ -248,13 +277,19 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
 
     const dir = o.sharedConfig ? null : configDir(home)
     const ours = bridgeEnv(base, health.contextTokens)
-    if (dir) {
-      const warning = writeSettings(dir, ours)
-      if (warning) say(warning)
-    }
+    const settings = launchSettingsFile(home)
+    writeLaunchSettings(settings, ours)
+    const managed = io.managedFile ?? managedSettingsFile(platform, io.env)
+    const overrides = managedOverrides(managed)
+    if (overrides.length)
+      say(
+        `your organisation's Claude Code settings in ${managed} set ${overrides.join(', ')}; they rank above ` +
+          `rebellm-claude, so claude may still go to your organisation's endpoint (/status in claude lists the sources)`,
+      )
     say(`starting ${claude} with ${dir ? `the config in ${dir}` : 'your own Claude Code config'}`)
     const env = childEnv(io.env, { ...ours, ...(dir ? { CLAUDE_CONFIG_DIR: dir } : {}) }, platform)
-    const child = spawn(claude, o.args, { stdio: 'inherit', env })
+    // Ours first: a --settings the user passes comes later and wins, as asked.
+    const child = spawn(claude, ['--settings', settings, ...o.args], { stdio: 'inherit', env })
     return await new Promise<number>((resolve) => {
       child.on('error', (e) => {
         say(`could not start ${claude}: ${e.message}`)

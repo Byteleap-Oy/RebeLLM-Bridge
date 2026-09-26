@@ -15,9 +15,11 @@ export const VERSION = (createRequire(import.meta.url)('../package.json') as { v
 export const TOKEN_ENV = 'REBELLM_BRIDGE_TOKEN'
 
 export const USAGE = `Usage: rebellm-bridge [options]
+       rebellm-bridge claude [launcher options] [claude arguments]
 
 Lets Claude Code (MCP or rebellm-claude) and OpenAI-style clients use the model in your RebeLLM tab.
 
+  claude ...      run Claude Code on the tab's model, the same as rebellm-claude
   --port <n>      port for the tab and the HTTP API (default ${DEFAULT_PORT})
   --host <addr>   address to listen on (default ${DEFAULT_HOST}; anything else exposes the model)
   --token <t>     token the tab must present (default: ${TOKEN_ENV}, else ~/.rebellm-bridge/token)
@@ -201,6 +203,11 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
 
 /** The command line; resolves with the exit code once the bridge has stopped. */
 export async function main(argv: string[], io: Io): Promise<number> {
+  if (argv[0] === 'claude') {
+    // Loaded here so the plain bridge never touches the launcher, and the two files can import each other.
+    const { launch } = await import('./launcher.js')
+    return launch(argv.slice(1), { stderr: io.stderr, env: io.env, ...(io.home ? { home: io.home } : {}) })
+  }
   const o = parseCli(argv)
   if ('error' in o) {
     io.stderr.write(`rebellm-bridge: ${o.error}\n\n${USAGE}\n`)

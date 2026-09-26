@@ -55,7 +55,7 @@ SDKs: OpenAI with `base_url="http://127.0.0.1:7343/v1"`, Anthropic with
 As Claude Code's model (its own config directory, your claude.ai login untouched):
 
 ```
-rebellm-claude                   # interactive
+npx rebellm-bridge claude        # nothing to install; rebellm-claude after npm install -g
 rebellm-claude -p "What is 2 + 3?"
 ```
 
@@ -64,6 +64,14 @@ and a long request timeout, and passes every other argument to `claude`. Options
 `--claude <path>`, `--shared-config` (use your normal Claude Code config), `--port <n>`.
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
 with a 32k context and patience on a slow GPU.
+
+On a work machine Claude Code may be pinned to the company's endpoint or cloud provider.
+The launcher blanks `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_USE_*`
+from your shell and passes its own variables with `--settings`, which ranks above the
+project's `.claude/settings.json` and your user settings. Managed settings (MDM,
+`managed-settings.json`, the claude.ai admin console) rank above that and only your
+organisation can change them: the launcher names the file when it finds one, and `/status`
+inside `claude` lists the setting sources in force.
 
 As a tool inside your normal Claude Code (Claude keeps its own model, can ask yours):
 

@@ -182,6 +182,13 @@ describe('main', () => {
     expect(t.err.text()).toContain('--port x is not a port number')
   })
 
+  it('hands "claude …" to the launcher', async () => {
+    const t = io()
+    const missing = join(tmpdir(), 'rebellm-bridge-no-such-claude')
+    expect(await main(['claude', '--claude', missing], t.io)).toBe(1)
+    expect(t.err.text()).toBe(`rebellm-claude: ${missing} was not found\n`)
+  })
+
   it('with --mcp, serves until the client closes stdin, then stops the bridge', async () => {
     const t = io()
     const code = main(['--mcp', '--port', '0'], t.io)

@@ -13,9 +13,12 @@ import {
   configDir,
   findCommand,
   launch,
+  launchSettingsFile,
   logFile,
+  managedOverrides,
+  managedSettingsFile,
   parseLauncher,
-  writeSettings,
+  writeLaunchSettings,
 } from './launcher.js'
 import { FakeTab } from './test/fake-tab.js'
 import { bridge } from './test/harness.js'
@@ -39,8 +42,9 @@ function sink() {
 const STUB = `
 import { writeFileSync } from 'node:fs'
 const pick = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
-  'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'API_TIMEOUT_MS',
-  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS']
+  'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'API_TIMEOUT_MS', 'ANTHROPIC_CUSTOM_HEADERS',
+  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
+  'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
 const env = Object.fromEntries(pick.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]))
 const health = await fetch(process.env.ANTHROPIC_BASE_URL + '/health').then((r) => r.json(), () => null)
 writeFileSync(process.env.STUB_OUT, JSON.stringify({ args: process.argv.slice(2), env, health }))
@@ -69,7 +73,8 @@ interface Seen {
 /** The parent's environment for a launch: PATH only where the stub is, plus the stub's own settings. */
 function env(pathDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const e: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(process.env)) if (!/^(path|anthropic_.*|claude_config_dir)$/i.test(k)) e[k] = v
+  for (const [k, v] of Object.entries(process.env))
+    if (!/^(path|anthropic_.*|claude_config_dir|claude_code_use_.*)$/i.test(k)) e[k] = v
   return { ...e, PATH: pathDir, ...extra }
 }
 
@@ -113,10 +118,16 @@ describe('findCommand', () => {
 })
 
 describe('environment and settings', () => {
-  it('points claude at the bridge and never passes a real API key on', () => {
+  it('points claude at the bridge and blanks what a workplace shell would put above it', () => {
     const ours = { ...bridgeEnv('http://127.0.0.1:7343', 32768), CLAUDE_CONFIG_DIR: '/h/.rebellm-bridge/claude' }
     const e = childEnv(
-      { HOME: '/h', ANTHROPIC_API_KEY: 'sk-real', ANTHROPIC_BASE_URL: 'https://elsewhere', CLAUDE_CONFIG_DIR: '/mine' },
+      {
+        HOME: '/h',
+        ANTHROPIC_API_KEY: 'sk-real',
+        ANTHROPIC_BASE_URL: 'https://elsewhere',
+        CLAUDE_CODE_USE_VERTEX: '1',
+        CLAUDE_CONFIG_DIR: '/mine',
+      },
       ours,
       'linux',
     )
@@ -130,26 +141,50 @@ describe('environment and settings', () => {
       API_TIMEOUT_MS: '600000',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768',
+      ANTHROPIC_API_KEY: '',
+      ANTHROPIC_CUSTOM_HEADERS: '',
+      CLAUDE_CODE_USE_BEDROCK: '',
+      CLAUDE_CODE_USE_VERTEX: '',
+      CLAUDE_CODE_USE_FOUNDRY: '',
     })
     expect(bridgeEnv('http://x', 0)).not.toHaveProperty('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
     // Windows spells variables in any case; the bridge's must still win.
-    const w = childEnv({ Anthropic_Api_Key: 'sk-real', Claude_Config_Dir: '/mine' }, bridgeEnv('http://x'), 'win32')
+    const w = childEnv(
+      { Anthropic_Api_Key: 'sk-real', Claude_Code_Use_Bedrock: '1', Claude_Config_Dir: '/mine' },
+      bridgeEnv('http://x'),
+      'win32',
+    )
     expect(w).not.toHaveProperty('Anthropic_Api_Key')
+    expect(w).not.toHaveProperty('Claude_Code_Use_Bedrock')
+    expect(w.ANTHROPIC_API_KEY).toBe('')
     expect(w.Claude_Config_Dir).toBe('/mine')
   })
 
-  it('merges the bridge into settings.json and leaves a broken file alone', () => {
-    const dir = join(temp(), 'claude')
-    expect(writeSettings(dir, { A: '1' })).toBeNull()
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ theme: 'dark', env: { KEEP: 'x', A: 'old' } }))
-    expect(writeSettings(dir, { A: '2' })).toBeNull()
-    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toEqual({
-      theme: 'dark',
-      env: { KEEP: 'x', A: '2' },
-    })
-    writeFileSync(join(dir, 'settings.json'), '{ broken')
-    expect(writeSettings(dir, { A: '3' })).toContain('could not read')
-    expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe('{ broken')
+  it('writes the --settings file and reads what managed settings pin', () => {
+    const home = temp()
+    const file = launchSettingsFile(home)
+    writeLaunchSettings(file, { A: '1' })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ env: { A: '1' } })
+    expect(managedSettingsFile('darwin', {})).toBe('/Library/Application Support/ClaudeCode/managed-settings.json')
+    expect(managedSettingsFile('win32', { programfiles: 'D:\\PF' })).toBe(
+      join('D:\\PF', 'ClaudeCode', 'managed-settings.json'),
+    )
+    expect(managedSettingsFile('linux', {})).toBe('/etc/claude-code/managed-settings.json')
+    const managed = join(home, 'managed-settings.json')
+    expect(managedOverrides(managed)).toEqual([])
+    writeFileSync(
+      managed,
+      JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: 'https://corp', CLAUDE_CODE_USE_VERTEX: '1', OTHER: 'x' },
+        apiKeyHelper: 'get-key',
+        permissions: {},
+      }),
+    )
+    expect(managedOverrides(managed)).toEqual(['ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_VERTEX', 'apiKeyHelper'])
+    writeFileSync(managed, JSON.stringify({ permissions: {}, env: { OTHER: 'x' } }))
+    expect(managedOverrides(managed)).toEqual([])
+    writeFileSync(managed, '{ broken')
+    expect(managedOverrides(managed)).toEqual([])
   })
 })
 
@@ -161,22 +196,31 @@ describe('launch', () => {
     const home = temp()
     const err = sink()
     const argv = ['-p', 'What is 2 + 3?', '--port', String(b.server.port), 'say "hi" & exit']
+    const managed = join(home, 'managed-settings.json')
+    writeFileSync(managed, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://corp' }, apiKeyHelper: 'x' }))
     const code = await launch(argv, {
       stderr: err.stream,
-      env: env(stub.dir, { STUB_OUT: stub.out, STUB_EXIT: '2', ANTHROPIC_API_KEY: 'sk-real' }),
+      env: env(stub.dir, {
+        STUB_OUT: stub.out,
+        STUB_EXIT: '2',
+        ANTHROPIC_API_KEY: 'sk-real',
+        CLAUDE_CODE_USE_VERTEX: '1',
+      }),
       home,
       pollMs: 20,
+      managedFile: managed,
     })
     expect(code).toBe(2)
     const seen = JSON.parse(readFileSync(stub.out, 'utf8')) as Seen
-    expect(seen.args).toEqual(['-p', 'What is 2 + 3?', 'say "hi" & exit'])
+    expect(seen.args).toEqual(['--settings', launchSettingsFile(home), '-p', 'What is 2 + 3?', 'say "hi" & exit'])
     expect(seen.env).toEqual({ ...bridgeEnv(b.base, 32768), CLAUDE_CONFIG_DIR: configDir(home) })
     expect(seen.health).toMatchObject({ tab: true, model: 'qwen' })
     expect(err.text()).toContain(`using the bridge already running on ${b.base}`)
     expect(err.text()).toContain('the RebeLLM tab is connected (model qwen, ready)')
+    expect(err.text()).toContain(`settings in ${managed} set ANTHROPIC_BASE_URL, apiKeyHelper; they rank above`)
     expect(existsSync(logFile(home))).toBe(false)
-    const settings = JSON.parse(readFileSync(join(configDir(home), 'settings.json'), 'utf8'))
-    expect(settings.env).toMatchObject({ ANTHROPIC_BASE_URL: b.base, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768' })
+    expect(existsSync(join(configDir(home), 'settings.json'))).toBe(false)
+    expect(JSON.parse(readFileSync(launchSettingsFile(home), 'utf8'))).toEqual({ env: bridgeEnv(b.base, 32768) })
     expect((await fetch(`${b.base}/health`)).status).toBe(200)
   })
 
@@ -189,6 +233,7 @@ describe('launch', () => {
       env: env(stub.dir, { STUB_OUT: stub.out, CLAUDE_CONFIG_DIR: 'mine' }),
       home,
       pollMs: 20,
+      managedFile: join(home, 'none.json'),
     })
     const started = async () => {
       for (let i = 0; i < 200 && !err.text().includes('waiting for the RebeLLM tab'); i++)
@@ -208,8 +253,10 @@ describe('launch', () => {
     expect(await running).toBe(0)
     const seen = JSON.parse(readFileSync(stub.out, 'utf8')) as Seen
     expect(seen.health).toMatchObject({ tab: true })
+    expect(seen.args).toEqual(['--settings', launchSettingsFile(home)])
     expect(seen.env.CLAUDE_CONFIG_DIR).toBe('mine')
     expect(existsSync(configDir(home))).toBe(false)
+    expect(err.text()).not.toContain('rank above')
     await expect(fetch(`${base}/health`)).rejects.toThrow()
     const log = readFileSync(logFile(home), 'utf8')
     expect(log).toMatch(/listening on 127\.0\.0\.1:\d+ for rebellm-claude/)
