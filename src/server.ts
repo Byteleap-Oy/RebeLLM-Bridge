@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { WebSocketServer } from 'ws'
+import { isMessagesPath, messagesRoutes, sendApiError } from './anthropic/routes.js'
+import { pathOf } from './http.js'
 import { openaiRoutes, sendError } from './openai.js'
 import { TabLink } from './tab.js'
 
@@ -44,15 +46,21 @@ export async function startServer(o: ServerOptions): Promise<BridgeServer> {
     ...(o.silenceMs ? { silenceMs: o.silenceMs } : {}),
   })
   const routes = openaiRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { keepAliveMs: o.keepAliveMs } : {}) })
+  const messages = messagesRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { pingMs: o.keepAliveMs } : {}) })
   // On loopback, a foreign Host means a DNS-rebinding page; bound wider, the user chose it.
   const strictHost = isLoopback(o.host)
   const hostOk = (req: IncomingMessage) =>
     !strictHost || req.headers.host === undefined || isLoopback(hostName(req.headers.host))
 
   const server = createServer((req, res) => {
+    // Anthropic clients read only Anthropic's error shape, OpenAI clients only OpenAI's.
+    const anthropic = isMessagesPath(pathOf(req))
     // Web pages have no business here; local clients send no Origin.
-    if (req.headers.origin !== undefined || !hostOk(req))
-      return sendError(res, 403, 'the bridge answers local clients only', 'forbidden')
+    if (req.headers.origin !== undefined || !hostOk(req)) {
+      const why = 'the bridge answers local clients only'
+      return anthropic ? sendApiError(res, 403, 'permission_error', why) : sendError(res, 403, why, 'forbidden')
+    }
+    if (anthropic) return messages(req, res)
     routes(req, res)
   })
   const wss = new WebSocketServer({ noServer: true })

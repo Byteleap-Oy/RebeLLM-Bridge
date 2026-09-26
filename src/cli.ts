@@ -9,13 +9,14 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { createMcpServer, httpBackend, serveStdio, tabBackend, type ChatBackend } from './mcp.js'
 import { DEFAULT_HOST, DEFAULT_PORT, isLoopback, startServer, type BridgeServer } from './server.js'
+import type { Health } from './tab.js'
 
 export const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version
 export const TOKEN_ENV = 'REBELLM_BRIDGE_TOKEN'
 
 export const USAGE = `Usage: rebellm-bridge [options]
 
-Lets Claude Code (MCP) and OpenAI-style clients use the model in your RebeLLM tab.
+Lets Claude Code (MCP or rebellm-claude) and OpenAI-style clients use the model in your RebeLLM tab.
 
   --port <n>      port for the tab and the HTTP API (default ${DEFAULT_PORT})
   --host <addr>   address to listen on (default ${DEFAULT_HOST}; anything else exposes the model)
@@ -118,14 +119,14 @@ export interface Running {
   close(): Promise<void>
 }
 
-/** A bridge of ours on that port, judged by its `/health`. */
-async function bridgeAt(base: string) {
+/** The `/health` of a bridge of ours at `base`; null when nothing or something else answers. */
+export async function bridgeHealth(base: string): Promise<Health | null> {
   try {
     const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) })
-    const body = (await r.json()) as { service?: unknown }
-    return body.service === 'rebellm-bridge'
+    const body = (await r.json()) as Health & { service?: unknown }
+    return body.service === 'rebellm-bridge' ? body : null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -164,7 +165,7 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e
     const probe = `http://${urlHost(isLoopback(o.host) ? o.host : DEFAULT_HOST)}:${o.port}`
-    if (!o.mcp || !(await bridgeAt(probe)))
+    if (!o.mcp || !(await bridgeHealth(probe)))
       throw new Error(`port ${o.port} on ${o.host} is in use${o.mcp ? '' : ' (another rebellm-bridge?)'}`, {
         cause: e,
       })
@@ -177,6 +178,7 @@ export async function run(o: CliOptions, io: Io): Promise<Running> {
     log(`${VERSION} listening on ${where}`)
     say(`  tab:    ws://${where}  (RebeLLM → Settings → Local bridge)`)
     say(`  OpenAI: http://${where}/v1`)
+    say(`  Claude: http://${where}  (Anthropic API; rebellm-claude runs Claude Code on it)`)
     say(
       `  token:  ${tok.source === 'flag' ? 'from --token' : tok.source === 'env' ? `from ${TOKEN_ENV}` : `in ${tok.file}`}`,
     )

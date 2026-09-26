@@ -104,6 +104,9 @@ describe('run', () => {
     expect(t.out.text()).toContain('Paste it into RebeLLM → Settings → Local bridge and turn the switch on.')
     expect(t.out.text()).toContain(`  tab:    ws://127.0.0.1:${port}`)
     expect(t.out.text()).toContain(`  OpenAI: http://127.0.0.1:${port}/v1`)
+    expect(t.out.text()).toContain(
+      `  Claude: http://127.0.0.1:${port}  (Anthropic API; rebellm-claude runs Claude Code`,
+    )
     expect(t.err.text()).toBe('')
     const tab = await FakeTab.ready(`ws://127.0.0.1:${port}`, token)
     onTestFinished(() => void tab.ws.terminate())

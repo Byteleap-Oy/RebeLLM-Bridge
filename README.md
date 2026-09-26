@@ -14,24 +14,33 @@ Claude Code (MCP tool) ────────MCP (stdio)───────�
 curl / any OpenAI client ──────HTTP /v1/chat/completions────▶                               runs here)
 ```
 
-1. `rebellm-claude` (or `rebellm-bridge` on its own) starts the bridge on `127.0.0.1:7343`
-   and prints a token the first time.
-2. In RebeLLM → Settings → Local bridge: paste the token, turn the switch on.
-3. Claude Code starts on the tab's model. Or add the bridge to Claude Code as an MCP server,
-   or point an Anthropic or OpenAI client at `http://127.0.0.1:7343`.
+## Getting started
 
-## Install and first start
-
-Node 22 or later. Run it without installing:
+You need Node 22 or later and a RebeLLM tab. Until the npm package is published, install
+from this repository:
 
 ```
-npx rebellm-bridge
+git clone https://github.com/Byteleap-Oy/RebeLLM-Bridge.git
+cd RebeLLM-Bridge
+npm install
+npm run build
+npm install -g .
 ```
 
-or install it once with `npm install -g rebellm-bridge`, which gives you `rebellm-bridge`
-and `rebellm-claude`. Without installing, `npx -p rebellm-bridge rebellm-claude` runs the
-launcher. From a clone: `npm install && npm run build && node dist/cli.js` (and
-`node dist/launcher.js`).
+That puts `rebellm-bridge` and `rebellm-claude` on your `PATH`.
+
+1. Start the bridge: `rebellm-bridge`. The first start prints a token and stores it in
+   `~/.rebellm-bridge/token`.
+2. In RebeLLM → Settings → Local bridge, paste the token and turn the switch on. The card
+   reads "Connected to 127.0.0.1:7343".
+3. Use the model:
+   - Claude Code on the tab's model: `rebellm-claude` (it starts the bridge itself when none
+     runs, and waits for the tab).
+   - Claude Code with the model as a tool: `claude mcp add rebellm -- rebellm-bridge --mcp`.
+   - Any Anthropic or OpenAI client: base URL `http://127.0.0.1:7343` (OpenAI clients add
+     `/v1`), any API key.
+
+## Running the bridge
 
 The first start creates a random token, stores it in `~/.rebellm-bridge/token` (owner-only
 permissions; on Windows the file is protected by your user profile) and prints it once:
@@ -109,9 +118,10 @@ claude
 
 **Context size.** Every Claude Code request carries its whole system prompt and tool
 definitions before any conversation: a first `-p` request from Claude Code 2.1.283 was
-about 49,000 characters, over half of them its 14 tool definitions, or about 14k tokens by
-the bridge's estimate. The app's default model has a context of 32768 tokens, so that
-leaves room for a short session; the tab must also read the whole prompt before its first
+about 49,000 characters, over half of them its 14 tool definitions: about 14k tokens by the
+bridge's estimate, 11,360 by the tab's count. The app's default model has a context of 32768
+tokens, so that leaves room for a short session; the tab must also read the whole prompt
+before its first
 token, which takes a while on a slow GPU. When a request does not fit, the bridge answers
 `prompt is too long: N tokens > M maximum`, and `/compact` or `/clear` makes room. How well
 Claude Code works depends on how well the tab's model uses tools; the model answers every
@@ -120,7 +130,7 @@ model name Claude Code asks for.
 ## Claude Code with the model as a tool
 
 ```
-claude mcp add rebellm -- npx rebellm-bridge --mcp
+claude mcp add rebellm -- rebellm-bridge --mcp
 ```
 
 Here Claude keeps its own model and can ask the tab's model through two tools; Claude Code
@@ -289,6 +299,31 @@ default model `qwen3.6-35b-a3b` loaded from local files and no relay.
 - The minutes are the model in the tab on that PC, not the bridge: the app's own chat, with no
   bridge involved, was still thinking about the same question after 10 minutes.
 
+Later the same day, the Messages API and `rebellm-claude`: bridge 0.1.0 from a clone (fresh
+home directory), the same app build and PC, Claude Code 2.1.283.
+
+- A streamed `POST /v1/messages` from Anthropic's TypeScript SDK (`messages.stream`, the
+  system prompt as a text block with `cache_control`, "Name the capital of Finland.",
+  `max_tokens` 64): `message_start` at once, a `ping` every 10 s, `Helsinki` in two deltas
+  after 35 s, then `message_delta` with `end_turn` and the tab's usage (28 prompt, 3
+  completion tokens) and `message_stop` after 38 s. `count_tokens` for the same body answered
+  14 at once; the estimate misses the chat template's own tokens on so short a prompt.
+- `rebellm-claude -p "What is 2 + 3?"` with the real `claude` against a scripted tab that
+  answers `5`: it reused the running bridge, started `claude` with its own config and printed
+  `5` (exit 0) after 3 s. The first try showed that Claude Code sends a `system` message inside
+  `messages`, which the bridge now passes on as a user message, and that it assumes 200k tokens
+  of context for a model it does not know, which the launcher now sets from the tab.
+- The same against the real tab: the tab read Claude Code's prompt, 11,360 tokens, for 21
+  minutes and had loaded the experts of 30 of the model's 40 layers when the page reloaded
+  (the development server had asked for a reload after another change to the app's files).
+  The bridge ended the stream with an `error` event. After the reload the Local bridge switch
+  was still on but its token was empty; with the token pasted again, Claude Code's retry
+  reached the tab, which then stood still at the first layer's experts with the GPU idle, and
+  Claude Code gave up after about 5 minutes with `Request timed out` (exit 1, passed on by the
+  launcher). So no answer from the real model through Claude Code yet: on this PC, with a 4 GB
+  expert budget, a prompt of Claude Code's size makes the tab load most of the model's experts
+  before the first token.
+
 ## Development
 
 ```
@@ -300,4 +335,7 @@ All changes go through the OpenSpec flow described in `CLAUDE.md`.
 
 ## Licence
 
-Apache-2.0. RebeLLM itself is a separate, proprietary project.
+Apache-2.0 with the Commons Clause (see `LICENSE`). Free to use, change and share, for
+anyone, companies included. Not for sale: you may not sell the software, or a hosting or
+support service whose value comes substantially from it. RebeLLM itself is a separate,
+proprietary project.

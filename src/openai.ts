@@ -1,10 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { HttpError, clientGone, pathOf, readJson, sendJson } from './http.js'
 import type { ChatMessage, ToolCall, ToolSchema, Usage } from './protocol.js'
 import { ChatError, type ChatInput, type ChatResult, type TabLink } from './tab.js'
-
-/** Long conversations are large, but not this large. */
-export const MAX_BODY = 8 << 20
 
 /** Well inside the read timeouts of common clients (Node's fetch: 300 s). */
 export const KEEPALIVE_MS = 15_000
@@ -18,11 +16,6 @@ export interface RouteOptions {
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v: unknown): v is string => typeof v === 'string'
-
-export function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
-  res.end(JSON.stringify(body))
-}
 
 /** OpenAI's error shape, which its SDKs turn into readable messages. */
 export function sendError(res: ServerResponse, status: number, message: string, type: string, code?: string) {
@@ -178,36 +171,6 @@ export function completion(r: ChatResult, meta: { id: string; created: number; m
   }
 }
 
-class HttpError extends Error {
-  readonly status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
-
-function readJson(req: IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    req.on('data', (c: Buffer) => {
-      size += c.length
-      if (size > MAX_BODY) {
-        reject(new HttpError(413, 'the request body is too large'))
-        req.destroy()
-      } else chunks.push(c)
-    })
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-      } catch {
-        reject(new HttpError(400, 'the body is not JSON'))
-      }
-    })
-    req.on('error', reject)
-  })
-}
-
 /** The HTTP routes for OpenAI-style clients: completions, models and health. */
 export function openaiRoutes(tab: TabLink, o: RouteOptions) {
   async function completions(req: IncomingMessage, res: ServerResponse) {
@@ -219,17 +182,16 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
     }
     const parsed = toChatInput(body)
     if ('error' in parsed) return sendError(res, 400, parsed.error, 'invalid_request_error')
-    const gone = new AbortController()
-    res.on('close', () => !res.writableFinished && gone.abort())
-    const missing = await tab.waitReady(o.waitMs, gone.signal)
-    if (gone.signal.aborted) return
+    const gone = clientGone(res)
+    const missing = await tab.waitReady(o.waitMs, gone)
+    if (gone.aborted) return
     if (missing) return sendError(res, 503, missing.message, 'service_unavailable', missing.code)
     const meta = { id: `chatcmpl-${newId()}`, created: Math.floor(Date.now() / 1000), model: tab.modelName }
-    if (parsed.stream) return stream(res, parsed.input, parsed.includeUsage, meta, gone.signal)
+    if (parsed.stream) return stream(res, parsed.input, parsed.includeUsage, meta, gone)
     try {
-      sendJson(res, 200, completion(await tab.chat(parsed.input, { signal: gone.signal }), meta))
+      sendJson(res, 200, completion(await tab.chat(parsed.input, { signal: gone }), meta))
     } catch (e) {
-      if (gone.signal.aborted) return
+      if (gone.aborted) return
       const err = e as ChatError
       if (err.kind === 'no_tab') return sendError(res, 503, err.message, 'service_unavailable', 'no_tab')
       sendError(res, 502, err.message, 'api_error', err.kind === 'disconnected' ? 'tab_disconnected' : 'tab_error')
@@ -277,7 +239,7 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
   }
 
   return function route(req: IncomingMessage, res: ServerResponse) {
-    const path = (req.url ?? '/').split('?')[0]
+    const path = pathOf(req)
     const get = req.method === 'GET' || req.method === 'HEAD'
     if (path === '/health' && get) return sendJson(res, 200, { service: 'rebellm-bridge', ...tab.health() })
     if (path === '/v1/models' && get) {

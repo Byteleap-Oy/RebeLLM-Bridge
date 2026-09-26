@@ -7,7 +7,8 @@ TBD - created by archiving change bridge-service. Update Purpose after archive.
 
 `rebellm-bridge` SHALL listen on `127.0.0.1:7343` by default, accept one RebeLLM tab over
 WebSocket with the protocol v1 and a token it generated and printed once, and answer a
-second tab with `busy`.
+second tab with `busy`. On start it SHALL print the addresses for the tab, OpenAI clients
+and Anthropic clients.
 
 #### Scenario: First start
 
@@ -28,6 +29,11 @@ second tab with `busy`.
 
 - **WHEN** a connected tab sends nothing for 50 s
 - **THEN** the bridge closes the connection and reports no tab
+
+#### Scenario: Startup output
+
+- **WHEN** the bridge starts on port 7343
+- **THEN** its output names `ws://127.0.0.1:7343` for the tab, `http://127.0.0.1:7343/v1` for OpenAI clients and `http://127.0.0.1:7343` for Anthropic clients with `rebellm-claude`
 
 ### Requirement: OpenAI-style endpoint
 
