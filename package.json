@@ -37,6 +37,7 @@
   ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
+    "prepublishOnly": "npm run check && npm run build",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",

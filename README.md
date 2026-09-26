@@ -11,13 +11,13 @@ Claude Code / curl / SDKs ──HTTP──▶ rebellm-bridge (127.0.0.1:7343) �
 
 ## Getting started
 
-Node 22+ and a RebeLLM tab. Until the npm package is published, install from this repo:
+Node 22+ and a RebeLLM tab.
 
 ```
-git clone https://github.com/Byteleap-Oy/RebeLLM-Bridge.git
-cd RebeLLM-Bridge
-npm install && npm run build && npm install -g .
+npm install -g rebellm-bridge     # or run it once with: npx rebellm-bridge
 ```
+
+(From source: clone this repo, `npm install && npm run build && npm install -g .`.)
 
 1. `rebellm-bridge` — the first start prints a token once and keeps it in
    `~/.rebellm-bridge/token` (`cat` it to see it again, delete it for a new one).
