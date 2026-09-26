@@ -1,8 +1,27 @@
 {
   "name": "rebellm-bridge",
   "version": "0.1.0",
-  "description": "Use the model running in your RebeLLM browser tab from Claude Code (as its model or through MCP) and any OpenAI-style client",
+  "description": "Use the model in your RebeLLM browser tab from the command line, OpenAI/Anthropic clients and Claude Code",
+  "keywords": [
+    "rebellm",
+    "llm",
+    "bridge",
+    "mcp",
+    "claude-code",
+    "openai-compatible",
+    "anthropic-compatible",
+    "webgpu"
+  ],
+  "author": "Byteleap Oy",
   "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://rebellm.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Byteleap-Oy/RebeLLM-Bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Byteleap-Oy/RebeLLM-Bridge/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -26,6 +45,12 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
   },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "cross-spawn": "^7.0.6",
+    "ws": "^8.21.3",
+    "zod": "^4.6.5"
+  },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
     "@eslint/js": "^10.0.1",
@@ -38,11 +63,5 @@
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^4.0.0"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.1",
-    "cross-spawn": "^7.0.6",
-    "ws": "^8.21.3",
-    "zod": "^4.6.5"
   }
 }
