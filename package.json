@@ -2,7 +2,7 @@
   "name": "rebellm-bridge",
   "version": "0.1.0",
   "description": "Use the model running in your RebeLLM browser tab from Claude Code (as its model or through MCP) and any OpenAI-style client",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "engines": {
     "node": ">=22"

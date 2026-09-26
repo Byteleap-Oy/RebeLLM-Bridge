@@ -3,7 +3,8 @@
 Project: RebeLLM Bridge, a small local service that lets tools on the user's machine
 (Claude Code through MCP, anything else through an OpenAI-style HTTP endpoint) use the
 model running in the user's RebeLLM browser tab. The tab connects out to this service over
-WebSocket; this service never runs a model itself. Public repository, Apache-2.0.
+WebSocket; this service never runs a model itself. Public repository, Apache-2.0 with the Commons Clause (free to use and share, not for sale);
+never call it open source.
 
 The protocol between the tab and the bridge is owned by the RebeLLM app (its `local-bridge`
 spec); `README.md` here carries the current copy. Change it there first, then here.
