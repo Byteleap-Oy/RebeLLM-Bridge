@@ -171,9 +171,14 @@ export const QUIET_SETTINGS = {
   showThinkingSummaries: false,
 } as const
 
+/** Allow rules skip auto mode's classifier, which the tab model cannot answer before it times out. */
+export const PERMISSIONS = { allow: ['WebFetch'] } as const
+
 export function writeLaunchSettings(file: string, env: Record<string, string>): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, `${JSON.stringify({ ...QUIET_SETTINGS, env }, null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(file, `${JSON.stringify({ ...QUIET_SETTINGS, permissions: PERMISSIONS, env }, null, 2)}\n`, {
+    mode: 0o600,
+  })
 }
 
 /** Where an organisation's Claude Code settings live; they rank above everything the launcher can do. */

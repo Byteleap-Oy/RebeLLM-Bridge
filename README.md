@@ -65,7 +65,10 @@ and a long request timeout, and passes every other argument to `claude`. Options
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
 with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request
 and subagent timeouts to hours, so a subagent that shows nothing for twenty minutes is
-prefilling, not stuck (the Bridge log in the tab shows it).
+prefilling, not stuck (the Bridge log in the tab shows it). It also allows `WebFetch` on
+every domain: auto mode would ask its safety classifier first, on the tab model, and that
+times out. Add `"deny": ["WebFetch"]` or `"ask": ["WebFetch"]` under `permissions` in your
+settings to take it back.
 
 On a work machine Claude Code may be pinned to the company's endpoint or cloud provider.
 The launcher blanks `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_USE_*`

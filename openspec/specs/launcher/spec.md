@@ -158,3 +158,20 @@ created token only once the bridge it started is listening.
 #### Scenario: Blank port
 - **WHEN** the launcher is started with `--port ' '`
 - **THEN** it exits with the error `--port needs a value`
+
+### Requirement: Page fetches allowed
+
+The `--settings` file the launcher writes SHALL allow Claude Code's `WebFetch` tool on
+every domain (`permissions.allow` holding `WebFetch`), so a page fetch neither waits on
+auto mode's classifier, which the tab model cannot answer in time, nor prompts in the
+other modes. It SHALL allow nothing else.
+
+#### Scenario: Settings file
+
+- **WHEN** the launcher writes its settings file
+- **THEN** the file's `permissions.allow` is exactly `["WebFetch"]`
+
+#### Scenario: Fetch in auto mode
+
+- **WHEN** Claude asks to fetch `https://www.hs.fi/` in auto mode under `rebellm-claude`
+- **THEN** Claude Code runs the fetch without asking the classifier

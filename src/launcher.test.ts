@@ -176,7 +176,11 @@ describe('environment and settings', () => {
     const home = temp()
     const file = launchSettingsFile(home, 7343)
     writeLaunchSettings(file, { A: '1' })
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...QUIET_SETTINGS, env: { A: '1' } })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+      ...QUIET_SETTINGS,
+      permissions: { allow: ['WebFetch'] },
+      env: { A: '1' },
+    })
     expect(QUIET_SETTINGS).toEqual({
       awaySummaryEnabled: false,
       promptSuggestionEnabled: false,
@@ -245,6 +249,7 @@ describe('launch', () => {
     expect(existsSync(join(configDir(home), 'settings.json'))).toBe(false)
     expect(JSON.parse(readFileSync(launchSettingsFile(home, b.server.port), 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
+      permissions: { allow: ['WebFetch'] },
       env: bridgeEnv(b.base, 32768),
     })
     expect((await fetch(`${b.base}/health`)).status).toBe(200)
