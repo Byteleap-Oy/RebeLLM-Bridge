@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change anthropic-messages. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Messages endpoint
 
 The bridge SHALL serve `POST /v1/messages` in the Anthropic Messages API format, answer
@@ -64,12 +66,18 @@ ignored.
 
 The bridge SHALL end generation at the first match of any `stop_sequences` entry, not
 emit the match, abort the tab's chat, and report `stop_reason: 'stop_sequence'` with the
-matched sequence.
+matched sequence. Text before a tool call SHALL be emitted before its `tool_use` block, and
+no match SHALL span a tool call.
 
 #### Scenario: Stop sequence split across tokens
 
 - **WHEN** the stop sequence is `END` and the tab streams `ok E` then `ND more`
 - **THEN** the client receives text `ok `, `stop_sequence: 'END'`, and the tab receives `abort`
+
+#### Scenario: Tool call after a possible match
+
+- **WHEN** the stop sequence is `END` and the tab streams `Reading E`, a tool call, then `ND`
+- **THEN** the client receives text `Reading `, `E`, the `tool_use` block, text `ND`, and `stop_reason: 'tool_use'`
 
 ### Requirement: Cancellation
 
@@ -120,4 +128,3 @@ connected tab.
 
 - **WHEN** a client posts a messages body to `/v1/messages/count_tokens`
 - **THEN** the response is `{ input_tokens: n }` with n greater than zero
-

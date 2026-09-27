@@ -74,7 +74,11 @@ async function answer(
           frames++
           sink.text(matcher.push(e.text))
           if (matcher.matched !== null) halt.abort()
-        } else for (const c of e.calls) sink.toolUse(toolUse(c))
+        } else {
+          // Held text belongs before the call, and no stop sequence spans a tool call.
+          sink.text(matcher.flush())
+          for (const c of e.calls) sink.toolUse(toolUse(c))
+        }
       },
     })
     sink.text(matcher.flush())

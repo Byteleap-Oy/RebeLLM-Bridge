@@ -194,6 +194,31 @@ describe('POST /v1/messages', () => {
     })
   })
 
+  it('sends held stop-sequence text before a tool call and matches no sequence across one', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    const read = { name: 'Read', input_schema: { type: 'object' } }
+    const body = { max_tokens: 99, stop_sequences: ['END'], tools: [read], messages: [user('go')] }
+    const call = (id: string) =>
+      tab.send({ t: 'tool_call', id, calls: [{ id: `${id}-c`, function: { name: 'Read', arguments: {} } }] })
+    tab.onChat = (c) => {
+      tab.send({ t: 'token', id: c.id, text: 'Reading E' })
+      call(c.id)
+      tab.send({ t: 'token', id: c.id, text: 'ND' })
+      done(tab, c.id, 'tool_call')
+    }
+    const all = await events(await post(b.base, { ...body, stream: true }))
+    const starts = all.filter((e) => e.type === 'content_block_start').map((e) => e.content_block.type)
+    expect(starts).toEqual(['text', 'tool_use', 'text'])
+    expect(all.filter((e) => e.delta?.type === 'text_delta').map((e) => e.delta.text)).toEqual(['Reading ', 'E', 'ND'])
+    expect(all.find((e) => e.type === 'message_delta').delta).toEqual({ stop_reason: 'tool_use', stop_sequence: null })
+    const msg: Json = await (await post(b.base, body)).json()
+    expect(msg).toMatchObject({
+      content: [{ type: 'text', text: 'Reading END' }, { type: 'tool_use' }],
+      stop_reason: 'tool_use',
+    })
+  })
+
   it('aborts the chat when the client goes away', async () => {
     const b = await bridge()
     const tab = await b.tab()
