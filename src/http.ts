@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 /** Long conversations are large, but not this large. */
 export const MAX_BODY = 8 << 20
+const MAX_DISCARD = 8 * MAX_BODY
 
 export class HttpError extends Error {
   readonly status: number
@@ -23,12 +24,14 @@ export function readJson(req: IncomingMessage): Promise<unknown> {
     let size = 0
     req.on('data', (c: Buffer) => {
       size += c.length
-      if (size > MAX_BODY) {
-        reject(new HttpError(413, 'the request body is too large'))
-        req.destroy()
-      } else chunks.push(c)
+      if (size <= MAX_BODY) return void chunks.push(c)
+      chunks.length = 0
+      reject(new HttpError(413, 'the request body is too large'))
+      // Reading on lets the client finish sending and see the 413; past this it is not listening.
+      if (size > MAX_DISCARD) req.destroy()
     })
     req.on('end', () => {
+      if (size > MAX_BODY) return
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
       } catch {

@@ -2,6 +2,7 @@ import { once } from 'node:events'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
+import { MAX_BODY } from './http.js'
 import { hostName, isLoopback, startServer } from './server.js'
 import { TOKEN, bridge } from './test/harness.js'
 
@@ -78,6 +79,18 @@ describe('server', () => {
     expect(await r.json()).toEqual({
       error: { message: 'no route for POST /v1/embeddings', type: 'invalid_request_error', code: 'not_found' },
     })
+  })
+
+  it('answers an oversized body with a readable 413 in each shape', async () => {
+    const b = await bridge()
+    const big = JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(MAX_BODY) }] })
+    const post = (path: string) => fetch(`${b.base}${path}`, { method: 'POST', body: big })
+    const anthropic = await post('/v1/messages')
+    expect(anthropic.status).toBe(413)
+    expect(await anthropic.json()).toMatchObject({ type: 'error', error: { type: 'request_too_large' } })
+    const openai = await post('/v1/chat/completions')
+    expect(openai.status).toBe(413)
+    expect(await openai.json()).toMatchObject({ error: { type: 'invalid_request_error' } })
   })
 
   it('fails to start on a port in use and frees its port on close', async () => {

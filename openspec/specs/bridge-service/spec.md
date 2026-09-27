@@ -110,3 +110,13 @@ each fetch by host only.
 - **WHEN** this computer has the global IPv6 address `2001:db8:1::5` and the tab asks for
   `http://[2001:db8:1::5]:8080/`, a host resolving to it, or a page that redirects there
 - **THEN** the bridge answers an error without connecting to that address
+
+### Requirement: Request body limit
+The bridge SHALL refuse a request body over 8 MiB with status 413 in the endpoint's error
+shape (`request_too_large` under `/v1/messages`, `invalid_request_error` under
+`/v1/chat/completions`), sent as a response the client can read rather than a dropped
+connection, and SHALL keep none of the refused body.
+
+#### Scenario: Oversized body
+- **WHEN** a client posts a 9 MiB body to `/v1/messages` or `/v1/chat/completions`
+- **THEN** it receives status 413 with the error in that endpoint's shape and nothing is sent to the tab
