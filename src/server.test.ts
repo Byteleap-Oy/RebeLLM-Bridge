@@ -53,8 +53,22 @@ describe('server', () => {
     await once(ws, 'open')
     ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKEN, model: '', contextTokens: 0, app: 't' }))
     const [data] = (await once(ws, 'message')) as [Buffer]
-    expect(JSON.parse(data.toString())).toEqual({ t: 'ok' })
+    expect(JSON.parse(data.toString())).toEqual({ t: 'ok', features: ['fetch'] })
     ws.terminate()
+  })
+
+  it("refuses the tab's fetch of a private address without connecting, and logs it as a request line", async () => {
+    const requests: string[] = []
+    const b = await bridge({ requestLog: (l) => requests.push(l) })
+    const fake = await b.tab()
+    fake.send({ t: 'fetch', id: 'p1', url: 'http://192.168.1.1/admin?token=x' })
+    expect(await fake.next((m) => m.t === 'error')).toEqual({
+      t: 'error',
+      id: 'p1',
+      message: '192.168.1.1 is not a public address',
+    })
+    expect(requests).toEqual(['fetch 192.168.1.1: error 192.168.1.1 is not a public address'])
+    expect(b.lines.some((l) => l.startsWith('fetch '))).toBe(false)
   })
 
   it('answers unknown routes with 404 in the OpenAI error shape', async () => {

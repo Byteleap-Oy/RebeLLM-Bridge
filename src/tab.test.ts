@@ -1,6 +1,6 @@
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer } from 'ws'
 import { CLOSE, ChatError, TabLink, sameToken, type ChatEvent, type TabLinkOptions } from './tab.js'
 import { FakeTab } from './test/fake-tab.js'
@@ -43,7 +43,7 @@ describe('TabLink', () => {
     const { tab, open, lines } = await link()
     expect(tab.health()).toEqual({ tab: false, state: 'none' })
     const fake = await open({ token: TOKEN, model: '', contextTokens: 8192, app: '1.2.3' })
-    expect(await fake.next()).toEqual({ t: 'ok' })
+    expect(await fake.next()).toEqual({ t: 'ok', features: ['fetch'] })
     expect(tab.connected).toBe(true)
     // Before the first status the model counts as loading.
     expect(tab.health()).toEqual({ tab: true, state: 'loading', contextTokens: 8192, app: '1.2.3' })
@@ -230,6 +230,87 @@ describe('TabLink', () => {
     expect(lines).toContain('the tab reported: The tab could not read this message (protocol v1)')
     expect(lines).toContain('ignored a frame from the tab that is not protocol v1')
     expect(tab.connected).toBe(true)
+  })
+})
+
+describe('TabLink: page fetch', () => {
+  const PAGE = {
+    status: 200,
+    type: 'text/html',
+    finalUrl: 'https://docs.example.org/v3/',
+    text: '<h1>Docs</h1>',
+    cut: false,
+  }
+  const fetched = (id: string) => (m: { t: string; id?: string }) =>
+    (m.t === 'fetched' || m.t === 'error') && m.id === id
+
+  it('reads the page the tab asks for and answers with its id; the request log names the host only', async () => {
+    const lines: string[] = []
+    const fetchPage = vi.fn(async () => PAGE)
+    const { ready } = await link({ fetchPage, requestLog: (l) => lines.push(l) })
+    const fake = await ready()
+    fake.send({ t: 'fetch', id: 'f1', url: 'https://docs.example.org/v3?q=secret' })
+    expect(await fake.next(fetched('f1'))).toEqual({ t: 'fetched', id: 'f1', ...PAGE })
+    expect(fetchPage).toHaveBeenCalledWith('https://docs.example.org/v3?q=secret', expect.any(AbortSignal))
+    expect(lines).toEqual(['fetch docs.example.org: 200, 13 bytes'])
+  })
+
+  it("answers a refusal as an error with the fetch's id", async () => {
+    const lines: string[] = []
+    const fetchPage = vi.fn(async () => Promise.reject(new Error('192.168.1.1 is not a public address')))
+    const { ready } = await link({ fetchPage, requestLog: (l) => lines.push(l) })
+    const fake = await ready()
+    fake.send({ t: 'fetch', id: 'f2', url: 'http://192.168.1.1/' })
+    expect(await fake.next(fetched('f2'))).toEqual({
+      t: 'error',
+      id: 'f2',
+      message: '192.168.1.1 is not a public address',
+    })
+    expect(lines).toEqual(['fetch 192.168.1.1: error 192.168.1.1 is not a public address'])
+  })
+
+  it('refuses a second fetch with a live id and more than 30 fetches a minute', async () => {
+    let release = () => undefined as void
+    const slow = new Promise<typeof PAGE>((r) => (release = () => r(PAGE)))
+    const fetchPage = vi.fn(async (url: string) => (url.endsWith('/slow') ? slow : PAGE))
+    const { ready } = await link({ fetchPage })
+    const fake = await ready()
+    fake.send({ t: 'fetch', id: 'same', url: 'https://a.example/slow' })
+    fake.send({ t: 'fetch', id: 'same', url: 'https://a.example/other' })
+    expect(await fake.next(fetched('same'))).toEqual({
+      t: 'error',
+      id: 'same',
+      message: 'a fetch with this id is already running',
+    })
+    release()
+    expect(await fake.next(fetched('same'))).toMatchObject({ t: 'fetched', id: 'same' })
+    for (let i = 0; i < 29; i++) fake.send({ t: 'fetch', id: `n${i}`, url: 'https://a.example/' })
+    for (let i = 0; i < 29; i++) expect(await fake.next(fetched(`n${i}`))).toMatchObject({ t: 'fetched' })
+    fake.send({ t: 'fetch', id: 'over', url: 'https://a.example/' })
+    expect(await fake.next(fetched('over'))).toEqual({
+      t: 'error',
+      id: 'over',
+      message: 'more than 30 page fetches a minute; try again shortly',
+    })
+    expect(fetchPage).toHaveBeenCalledTimes(30)
+  })
+
+  it('cancels a running fetch when the tab disconnects', async () => {
+    let signal: AbortSignal | undefined
+    const fetchPage = vi.fn(
+      (_url: string, s: AbortSignal) =>
+        new Promise<typeof PAGE>((_, reject) => {
+          signal = s
+          s.addEventListener('abort', () => reject(new Error('cancelled')))
+        }),
+    )
+    const { tab, ready } = await link({ fetchPage })
+    const fake = await ready()
+    fake.send({ t: 'fetch', id: 'f3', url: 'https://a.example/' })
+    await vi.waitFor(() => expect(signal).toBeDefined())
+    await fake.close()
+    await vi.waitFor(() => expect(tab.connected).toBe(false))
+    expect(signal!.aborted).toBe(true)
   })
 })
 

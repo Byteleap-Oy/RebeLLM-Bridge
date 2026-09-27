@@ -87,3 +87,19 @@ refusal, or an error; message content SHALL never be logged; `--quiet` SHALL sil
 - **WHEN** the bridge runs with `--quiet`
 - **THEN** no request lines are written
 
+### Requirement: Page fetch for the tab
+The bridge SHALL list `fetch` in its `ok` features and, on a tab's `{ t: 'fetch', id, url }`,
+SHALL fetch the page from this computer and answer `fetched` with status, type, final URL,
+text and whether it was cut, or an `error`; it SHALL accept only `http` and `https`, refuse
+any hop whose address is not public and dial the checked address, follow at most five
+redirects, send no cookies or credentials, pass text types only, stop at 2 MB and 15 s,
+allow 30 fetches a minute, and log each fetch by host only.
+
+#### Scenario: Public page
+- **WHEN** the tab asks for `https://docs.python.org/3/library/json.html`
+- **THEN** the bridge answers `fetched` with status 200, type text/html and the page text
+
+#### Scenario: Private address
+- **WHEN** the tab asks for `http://192.168.1.1/` or a page that redirects there
+- **THEN** the bridge answers an error without connecting to that address
+

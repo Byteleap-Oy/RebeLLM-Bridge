@@ -33,6 +33,20 @@ export interface Usage {
   tokensPerSec: number
 }
 
+/** What this bridge offers besides chats; `ok` lists it, and older tabs ignore it. */
+export const FEATURES = ['fetch']
+
+/** A page the bridge read for the tab. */
+export interface FetchedPage {
+  status: number
+  /** The content type without its parameters. */
+  type: string
+  finalUrl: string
+  text: string
+  /** The body was longer than the bridge reads. */
+  cut: boolean
+}
+
 /** Tab → bridge. */
 export type TabMessage =
   | { t: 'hello'; v: number; token: string; model: string; contextTokens: number; app: string }
@@ -42,6 +56,7 @@ export type TabMessage =
   | { t: 'error'; id?: string; message: string }
   | { t: 'queued'; id: string; position: number }
   | { t: 'status'; state: ModelState; model?: string; detail?: string }
+  | { t: 'fetch'; id: string; url: string }
   | { t: 'ping' }
   | { t: 'pong' }
 
@@ -56,8 +71,11 @@ export interface ChatRequest {
 
 /** Bridge → tab. */
 export type BridgeMessage =
-  | { t: 'ok' }
+  | { t: 'ok'; features?: string[] }
   | { t: 'error'; code: 'auth' | 'version' | 'busy'; message?: string }
+  /** The answer to a `fetch` the bridge could not read. */
+  | { t: 'error'; id: string; message: string }
+  | ({ t: 'fetched'; id: string } & FetchedPage)
   | ChatRequest
   | { t: 'abort'; id: string }
   | { t: 'ping' }
@@ -93,6 +111,8 @@ function valid(m: Obj): boolean {
       return isStr(m.id) && isNum(m.position)
     case 'status':
       return STATES.has(m.state) && optStr(m.model) && optStr(m.detail)
+    case 'fetch':
+      return isStr(m.id) && isStr(m.url)
     case 'ping':
     case 'pong':
       return true

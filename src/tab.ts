@@ -1,12 +1,15 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import type { RawData, WebSocket } from 'ws'
+import { PER_MINUTE, fetchLine, pageFetch, rateLimit } from './pagefetch.js'
 import {
+  FEATURES,
   PROTOCOL_VERSION,
   encode,
   parseTabMessage,
   type BridgeMessage,
   type ChatMessage,
+  type FetchedPage,
   type ModelState,
   type StopReason,
   type TabMessage,
@@ -76,6 +79,10 @@ export interface TabLinkOptions {
   pingMs?: number
   silenceMs?: number
   log?: (line: string) => void
+  /** Where the page fetch lines go; `log` when absent. */
+  requestLog?: (line: string) => void
+  /** Reads a page for the tab; pagefetch.ts by default. */
+  fetchPage?: (url: string, signal: AbortSignal) => Promise<FetchedPage>
 }
 
 type Hello = Extract<TabMessage, { t: 'hello' }>
@@ -106,6 +113,11 @@ export class TabLink extends EventEmitter {
   private readonly pingMs: number
   private readonly silenceMs: number
   private readonly log: (line: string) => void
+  private readonly requestLog: (line: string) => void
+  private readonly fetchPage: (url: string, signal: AbortSignal) => Promise<FetchedPage>
+  // One bucket for the tab, across reconnects.
+  private readonly mayFetch = rateLimit()
+  private fetches = new Map<string, AbortController>()
   private ws: WebSocket | null = null
   private hello: Hello | null = null
   private status: Status | null = null
@@ -122,6 +134,8 @@ export class TabLink extends EventEmitter {
     this.pingMs = o.pingMs ?? PING_MS
     this.silenceMs = o.silenceMs ?? SILENCE_MS
     this.log = o.log ?? (() => undefined)
+    this.requestLog = o.requestLog ?? this.log
+    this.fetchPage = o.fetchPage ?? ((url, signal) => pageFetch(url, { signal }))
   }
 
   get connected() {
@@ -258,7 +272,7 @@ export class TabLink extends EventEmitter {
     this.ws = ws
     this.hello = hello
     this.status = null
-    send(ws, { t: 'ok' })
+    send(ws, { t: 'ok', features: FEATURES })
     this.pinger = setInterval(() => send(ws, { t: 'ping' }), this.pingMs)
     const model = hello.model ? `, model ${hello.model}` : ''
     this.log(`RebeLLM tab connected (app ${hello.app || 'unknown'}${model})`)
@@ -271,6 +285,8 @@ export class TabLink extends EventEmitter {
     this.ws = null
     this.hello = null
     this.status = null
+    for (const f of this.fetches.values()) f.abort()
+    this.fetches.clear()
     const open = [...this.pending.values()]
     this.pending.clear()
     for (const p of open) p.fail(new ChatError('the RebeLLM tab disconnected', 'disconnected'))
@@ -295,6 +311,8 @@ export class TabLink extends EventEmitter {
         this.emit('change')
         return
       }
+      case 'fetch':
+        return this.fetchFor(m.id, m.url)
       case 'token':
       case 'tool_call':
       case 'queued':
@@ -306,6 +324,34 @@ export class TabLink extends EventEmitter {
         if (p) route(p, m, m.id)
       }
     }
+  }
+
+  /** Reads a page the tab asked for and answers `fetched` or `error` with its id. */
+  private fetchFor(id: string, url: string) {
+    const ws = this.ws
+    if (!ws) return
+    const answer = (m: BridgeMessage) => this.ws === ws && send(ws, m)
+    if (this.fetches.has(id)) return answer({ t: 'error', id, message: 'a fetch with this id is already running' })
+    if (!this.mayFetch()) {
+      const message = `more than ${PER_MINUTE} page fetches a minute; try again shortly`
+      this.requestLog(fetchLine(url, message))
+      return answer({ t: 'error', id, message })
+    }
+    const ctl = new AbortController()
+    this.fetches.set(id, ctl)
+    this.fetchPage(url, ctl.signal)
+      .then(
+        (page) => {
+          this.requestLog(fetchLine(url, page))
+          answer({ t: 'fetched', id, ...page })
+        },
+        (e: unknown) => {
+          const message = e instanceof Error ? e.message : String(e)
+          this.requestLog(fetchLine(url, message))
+          answer({ t: 'error', id, message })
+        },
+      )
+      .finally(() => this.fetches.get(id) === ctl && this.fetches.delete(id))
   }
 }
 

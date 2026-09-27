@@ -108,10 +108,19 @@ protocol; nothing needs a GPU.
 ## Protocol
 
 The tab speaks protocol v1 to the bridge: JSON frames over one WebSocket — `hello` (token,
-version, model, context) → `ok`/`error`; the bridge sends `chat`/`abort`, the tab answers
-`queued`, `token`, `tool_call`, `done` (stop reason, usage) or `error`, plus `status` on
-model state changes and `ping`/`pong`. Types and parser: `src/protocol.ts`; the RebeLLM app
-owns the specification.
+version, model, context) → `ok` (with `features`, here `["fetch"]`)/`error`; the bridge sends
+`chat`/`abort`, the tab answers `queued`, `token`, `tool_call`, `done` (stop reason, usage) or
+`error`, plus `status` on model state changes and `ping`/`pong`. Types and parser:
+`src/protocol.ts`; the RebeLLM app owns the specification.
+
+Page fetch: the tab may send `fetch` (id, url) for a page that does not let web pages read
+it; the bridge reads it from this computer and answers `fetched` (id, status, type, finalUrl,
+text, cut) or `error` (id, message). Only `http` and `https`; every hop's address is resolved
+and refused unless public (no loopback, private, link-local, CGNAT, multicast, reserved or
+unique-local addresses, also in IPv4-mapped forms), and the checked address is the one
+dialled; at most five redirects; no cookies or credentials; text types only (HTML, plain,
+Markdown, JSON, XML); 2 MB (longer text comes back `cut`) and 15 s; 30 fetches a minute. The
+request log gets one line per fetch naming the host only (`--quiet` silences it).
 
 ## Development
 

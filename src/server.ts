@@ -41,13 +41,14 @@ export function hostName(header: string) {
 
 /** The tab (WebSocket upgrade) and the HTTP clients on one port. */
 export async function startServer(o: ServerOptions): Promise<BridgeServer> {
+  const log = o.requestLog ?? o.log
   const tab = new TabLink({
     token: o.token,
     ...(o.log ? { log: o.log } : {}),
+    ...(log ? { requestLog: log } : {}),
     ...(o.pingMs ? { pingMs: o.pingMs } : {}),
     ...(o.silenceMs ? { silenceMs: o.silenceMs } : {}),
   })
-  const log = o.requestLog ?? o.log
   const routes = openaiRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { keepAliveMs: o.keepAliveMs } : {}), log })
   const messages = messagesRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { pingMs: o.keepAliveMs } : {}), log })
   // On loopback, a foreign Host means a DNS-rebinding page; bound wider, the user chose it.

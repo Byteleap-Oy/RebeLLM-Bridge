@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROTOCOL_VERSION, encode, parseTabMessage } from './protocol.js'
+import { FEATURES, PROTOCOL_VERSION, encode, parseTabMessage } from './protocol.js'
 
 const parse = (o: unknown) => parseTabMessage(JSON.stringify(o))
 
@@ -46,9 +46,20 @@ describe('protocol v1', () => {
     expect(parse({ t: 'status', state: 'ready', model: 'm' })).not.toBeNull()
     expect(parse({ t: 'status', state: 'asleep' })).toBeNull()
     expect(parse({ t: 'ping' })).toEqual({ t: 'ping' })
+    expect(parse({ t: 'fetch', id: 'f1', url: 'https://example.org/' })).toEqual({
+      t: 'fetch',
+      id: 'f1',
+      url: 'https://example.org/',
+    })
+    expect(parse({ t: 'fetch', id: 'f1' })).toBeNull()
+    expect(parse({ t: 'fetch', url: 'https://example.org/' })).toBeNull()
   })
 
   it('encodes bridge messages as JSON', () => {
     expect(JSON.parse(encode({ t: 'abort', id: '7' }))).toEqual({ t: 'abort', id: '7' })
+    expect(JSON.parse(encode({ t: 'ok', features: FEATURES }))).toEqual({ t: 'ok', features: ['fetch'] })
+    const page = { status: 200, type: 'text/plain', finalUrl: 'https://e.org/', text: 'hi', cut: false }
+    expect(JSON.parse(encode({ t: 'fetched', id: 'f1', ...page }))).toEqual({ t: 'fetched', id: 'f1', ...page })
+    expect(JSON.parse(encode({ t: 'error', id: 'f1', message: 'no' }))).toEqual({ t: 'error', id: 'f1', message: 'no' })
   })
 })
