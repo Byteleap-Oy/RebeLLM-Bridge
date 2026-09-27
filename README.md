@@ -124,8 +124,8 @@ request log gets one line per fetch naming the host only (`--quiet` silences it)
 
 ## Development
 
-All changes go through the OpenSpec flow in `CLAUDE.md`; `npm install` enables the
-pre-commit gate.
+All changes go through the OpenSpec flow in `CLAUDE.md`; `npm install` builds `dist/` and,
+in this repo's own checkout, enables the pre-commit gate.
 
 ## Licence
 
