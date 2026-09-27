@@ -68,7 +68,9 @@ and subagent timeouts to hours, so a subagent that shows nothing for twenty minu
 prefilling, not stuck (the Bridge log in the tab shows it). It also allows `WebFetch` and
 `WebSearch` on every domain: auto mode would ask its safety classifier first, on the tab
 model, and that times out. Add them to `"deny"` or `"ask"` under `permissions` in your
-settings to take it back.
+settings to take it back. It also sets `skipWebFetchPreflight`, so WebFetch no longer asks
+`api.anthropic.com` whether a host is blocked; when that check cannot answer, every fetch
+fails.
 
 WebSearch works through the bridge: Anthropic runs its `web_search` tool itself, so the
 bridge does instead. The tab gets a `web_search` tool; each search it asks for goes to

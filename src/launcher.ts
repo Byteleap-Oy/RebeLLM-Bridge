@@ -174,11 +174,18 @@ export const QUIET_SETTINGS = {
 /** Allow rules skip auto mode's classifier, which the tab model cannot answer before it times out. */
 export const PERMISSIONS = { allow: ['WebFetch', 'WebSearch'] } as const
 
+/** WebFetch fails whenever its hostname check at api.anthropic.com cannot answer. */
+export const SKIP_FETCH_PREFLIGHT = { skipWebFetchPreflight: true } as const
+
 export function writeLaunchSettings(file: string, env: Record<string, string>): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  writeFileSync(file, `${JSON.stringify({ ...QUIET_SETTINGS, permissions: PERMISSIONS, env }, null, 2)}\n`, {
-    mode: 0o600,
-  })
+  writeFileSync(
+    file,
+    `${JSON.stringify({ ...QUIET_SETTINGS, ...SKIP_FETCH_PREFLIGHT, permissions: PERMISSIONS, env }, null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  )
 }
 
 /** Where an organisation's Claude Code settings live; they rank above everything the launcher can do. */

@@ -178,6 +178,7 @@ describe('environment and settings', () => {
     writeLaunchSettings(file, { A: '1' })
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
+      skipWebFetchPreflight: true,
       permissions: { allow: ['WebFetch', 'WebSearch'] },
       env: { A: '1' },
     })
@@ -249,6 +250,7 @@ describe('launch', () => {
     expect(existsSync(join(configDir(home), 'settings.json'))).toBe(false)
     expect(JSON.parse(readFileSync(launchSettingsFile(home, b.server.port), 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
+      skipWebFetchPreflight: true,
       permissions: { allow: ['WebFetch', 'WebSearch'] },
       env: bridgeEnv(b.base, 32768),
     })
