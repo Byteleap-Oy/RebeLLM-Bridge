@@ -172,7 +172,7 @@ export const QUIET_SETTINGS = {
 } as const
 
 /** Allow rules skip auto mode's classifier, which the tab model cannot answer before it times out. */
-export const PERMISSIONS = { allow: ['WebFetch'] } as const
+export const PERMISSIONS = { allow: ['WebFetch', 'WebSearch'] } as const
 
 export function writeLaunchSettings(file: string, env: Record<string, string>): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })

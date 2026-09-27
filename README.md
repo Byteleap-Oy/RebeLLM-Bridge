@@ -65,10 +65,16 @@ and a long request timeout, and passes every other argument to `claude`. Options
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
 with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request
 and subagent timeouts to hours, so a subagent that shows nothing for twenty minutes is
-prefilling, not stuck (the Bridge log in the tab shows it). It also allows `WebFetch` on
-every domain: auto mode would ask its safety classifier first, on the tab model, and that
-times out. Add `"deny": ["WebFetch"]` or `"ask": ["WebFetch"]` under `permissions` in your
+prefilling, not stuck (the Bridge log in the tab shows it). It also allows `WebFetch` and
+`WebSearch` on every domain: auto mode would ask its safety classifier first, on the tab
+model, and that times out. Add them to `"deny"` or `"ask"` under `permissions` in your
 settings to take it back.
+
+WebSearch works through the bridge: Anthropic runs its `web_search` tool itself, so the
+bridge does instead. The tab gets a `web_search` tool; each search it asks for goes to
+DuckDuckGo from this computer (the page fetch's checks and limits apply), and the tab gets
+the top five results, snippets cut short to save tokens. The request log gets one line per
+search with its result count, never the query.
 
 On a work machine Claude Code may be pinned to the company's endpoint or cloud provider.
 The launcher blanks `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_USE_*`

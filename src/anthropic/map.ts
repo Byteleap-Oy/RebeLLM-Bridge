@@ -10,7 +10,29 @@ const absent = (v: unknown) => v === undefined || v === null
 
 export const newId = () => randomBytes(12).toString('hex')
 
-export type ParsedMessages = { input: ChatInput; stream: boolean; stopSequences: string[] } | { error: string }
+/** The request's `web_search` server tool, which the bridge runs itself. */
+export interface SearchTool {
+  maxUses: number
+  allowed: string[]
+  blocked: string[]
+}
+
+export type ParsedMessages =
+  { input: ChatInput; stream: boolean; stopSequences: string[]; search?: SearchTool } | { error: string }
+
+export const SEARCH_NAME = 'web_search'
+/** Searches a request may run when its tool names no `max_uses`. */
+export const MAX_USES = 5
+
+/** What the tab sees of the `web_search` server tool; short, as it is in every round's prompt. */
+export const SEARCH_SCHEMA: ToolSchema = {
+  type: 'function',
+  function: {
+    name: SEARCH_NAME,
+    description: 'Search the web.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+  },
+}
 
 /** A content block the tab cannot take, as text it can. */
 const omitted = (type: string) => `[${type} omitted]`
@@ -99,12 +121,28 @@ function assistantMessage(
   return { role: 'assistant', content: texts.join('\n\n'), ...(calls.length ? { tool_calls: calls } : {}) }
 }
 
-function toolSchemas(tools: unknown): ToolSchema[] | { error: string } {
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter(isStr) : [])
+
+function searchTool(t: Obj): SearchTool {
+  const n = t.max_uses
+  return {
+    maxUses: Number.isInteger(n) && (n as number) > 0 ? (n as number) : MAX_USES,
+    allowed: strings(t.allowed_domains),
+    blocked: strings(t.blocked_domains),
+  }
+}
+
+function toolSchemas(tools: unknown): { tools: ToolSchema[]; search?: SearchTool } | { error: string } {
   if (!Array.isArray(tools)) return { error: 'tools must be an array' }
   const out: ToolSchema[] = []
+  let search: SearchTool | undefined
   for (const [i, t] of tools.entries()) {
     if (!isObj(t)) return { error: `tools.${i} must be an object` }
-    // Server tools (web search, code execution, ...) run at Anthropic; the tab has none.
+    if (isStr(t.type) && t.type.startsWith('web_search_')) {
+      search = searchTool(t)
+      continue
+    }
+    // Other server tools (code execution, ...) run at Anthropic; the tab has none.
     if (!absent(t.type) && t.type !== 'custom') continue
     if (!isStr(t.name) || !t.name) return { error: `tools.${i}.name must be a non-empty string` }
     if (!absent(t.description) && !isStr(t.description)) return { error: `tools.${i}.description must be a string` }
@@ -118,7 +156,9 @@ function toolSchemas(tools: unknown): ToolSchema[] | { error: string } {
       },
     })
   }
-  return out
+  // A client tool of that name wins; its calls go back to the client.
+  if (!search || out.some((t) => t.function.name === SEARCH_NAME)) return { tools: out }
+  return { tools: [...out, SEARCH_SCHEMA], search }
 }
 
 /** A Messages API request as the tab's `chat`; the error names the field that is wrong. */
@@ -157,11 +197,13 @@ export function toChatInput(body: unknown): ParsedMessages {
     messages.push(...(Array.isArray(out) ? out : [out]))
   }
   const input: ChatInput = { messages }
+  let search: SearchTool | undefined
   const choice = body.tool_choice
   if (!absent(body.tools) && !(isObj(choice) && choice.type === 'none')) {
-    const tools = toolSchemas(body.tools)
-    if ('error' in tools) return tools
-    if (tools.length) input.tools = tools
+    const parsed = toolSchemas(body.tools)
+    if ('error' in parsed) return parsed
+    if (parsed.tools.length) input.tools = parsed.tools
+    search = parsed.search
   }
   if (!absent(body.max_tokens)) {
     if (!Number.isInteger(body.max_tokens) || (body.max_tokens as number) < 1)
@@ -180,7 +222,7 @@ export function toChatInput(body: unknown): ParsedMessages {
       return { error: 'stop_sequences must be an array of strings' }
     stopSequences = body.stop_sequences.filter((s) => s.length > 0)
   }
-  return { input, stream: body.stream === true, stopSequences }
+  return { input, stream: body.stream === true, stopSequences, ...(search ? { search } : {}) }
 }
 
 /** Rough prompt size without a tokenizer: `ceil(chars / 3.5)` over messages, calls and tools. */

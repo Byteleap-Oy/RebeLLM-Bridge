@@ -1,8 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { HttpError, clientGone, pathOf, readJson, sendJson } from '../http.js'
+import type { ChatMessage } from '../protocol.js'
 import { requestLog, type LogLine, type RequestLog } from '../reqlog.js'
 import { ChatError, type ChatInput, type TabLink } from '../tab.js'
+import { SearchError, duckDuckGo, resultsText, type WebSearch } from '../websearch.js'
 import {
+  SEARCH_NAME,
   content,
   estimateTokens,
   message,
@@ -14,10 +17,20 @@ import {
   tooLong,
   toolUse,
   usage,
+  type SearchTool,
 } from './map.js'
 import { EventWriter } from './sse.js'
 import { StopMatcher } from './stop.js'
-import type { ErrorType, StopReason, ToolUseBlock, Usage } from './types.js'
+import type {
+  ContentBlock,
+  ErrorType,
+  ServerToolUseBlock,
+  StopReason,
+  ToolUseBlock,
+  Usage,
+  WebSearchError,
+  WebSearchToolResultBlock,
+} from './types.js'
 
 /** The Messages API sends a ping about this often; clients expect something within a minute. */
 export const PING_MS = 10_000
@@ -28,6 +41,8 @@ export interface MessagesOptions {
   pingMs?: number
   /** Request lines; none without it. */
   log?: LogLine
+  /** Runs the tab's `web_search` calls; DuckDuckGo from this computer by default. */
+  search?: WebSearch
 }
 
 /** Anthropic's error shape, the only one its SDKs (and Claude Code) read. */
@@ -46,6 +61,12 @@ interface Outcome {
 interface Sink {
   text(text: string): void
   toolUse(block: ToolUseBlock): void
+}
+
+interface SearchSink {
+  text(text: string): void
+  toolUse(block: ToolUseBlock | ServerToolUseBlock): void
+  searchResult(block: WebSearchToolResultBlock): void
 }
 
 /**
@@ -89,8 +110,127 @@ async function answer(
   }
 }
 
+interface Searched {
+  content: WebSearchToolResultBlock['content']
+  /** What the tab reads. */
+  text: string
+}
+
+const failed = (code: WebSearchError['error_code']): Searched => ({
+  content: { type: 'web_search_tool_result_error', error_code: code },
+  text:
+    code === 'max_uses_exceeded'
+      ? 'Error: no searches left; answer with what you have.'
+      : `Error: the search failed (${code}); answer without it.`,
+})
+
+/**
+ * Answers with the tab; with a `web_search` server tool, runs each search the tab asks for,
+ * gives it the results and chats again, until it answers without searching.
+ */
+async function respond(
+  tab: TabLink,
+  parsed: { input: ChatInput; stopSequences: string[]; search?: SearchTool },
+  estimate: number,
+  signal: AbortSignal,
+  sink: SearchSink,
+  rlog: RequestLog,
+  search: WebSearch,
+): Promise<Outcome> {
+  const { input, stopSequences: stops, search: web } = parsed
+  if (!web) return answer(tab, input, stops, estimate, signal, sink, rlog)
+  let messages = input.messages
+  let uses = 0
+  let searches = 0
+  let output = 0
+  const total = (o: Outcome): Outcome => ({
+    ...o,
+    usage: {
+      ...o.usage,
+      output_tokens: output,
+      ...(searches ? { server_tool_use: { web_search_requests: searches } } : {}),
+    },
+  })
+  const run = async (query: unknown): Promise<Searched> => {
+    try {
+      const found = await search(typeof query === 'string' ? query : '', {
+        allowed: web.allowed,
+        blocked: web.blocked,
+        signal,
+      })
+      searches++
+      rlog.searched(found.length)
+      return {
+        content: found.map((r) => ({
+          type: 'web_search_result',
+          url: r.url,
+          title: r.title,
+          encrypted_content: '',
+          page_age: null,
+        })),
+        text: resultsText(found),
+      }
+    } catch (e) {
+      if (signal.aborted) throw e
+      const code = e instanceof SearchError ? e.code : 'unavailable'
+      rlog.searched(code)
+      return failed(code)
+    }
+  }
+  for (;;) {
+    // Out of searches, the tab is no longer offered the tool.
+    const offered = uses < web.maxUses
+    const tools = offered ? input.tools : input.tools?.filter((t) => t.function.name !== SEARCH_NAME)
+    const round: ChatInput = { ...input, messages }
+    if (tools?.length) round.tools = tools
+    else delete round.tools
+    let text = ''
+    let clientCalls = 0
+    const calls: ToolUseBlock[] = []
+    const out = await answer(
+      tab,
+      round,
+      stops,
+      estimate,
+      signal,
+      {
+        text: (t) => {
+          text += t
+          sink.text(t)
+        },
+        toolUse: (b) => {
+          if (b.name === SEARCH_NAME) calls.push(b)
+          else {
+            clientCalls++
+            sink.toolUse(b)
+          }
+        },
+      },
+      rlog,
+    )
+    output += out.usage.output_tokens
+    if (out.reason === 'stop_sequence' || !calls.length) return total(out)
+    const results: ChatMessage[] = []
+    for (const c of calls) {
+      const id = `srvtoolu_${newId()}`
+      sink.toolUse({ type: 'server_tool_use', id, name: SEARCH_NAME, input: c.input })
+      const r = ++uses > web.maxUses ? failed('max_uses_exceeded') : await run(c.input.query)
+      sink.searchResult({ type: 'web_search_tool_result', tool_use_id: id, content: r.content })
+      results.push({ role: 'tool', name: SEARCH_NAME, content: r.text })
+    }
+    // Client tool calls end the answer; the client runs them and asks again.
+    if (clientCalls) return total({ ...out, reason: 'tool_use' })
+    // A tab that searches with no search tool offered would never stop.
+    if (!offered) return total({ ...out, reason: 'end_turn' })
+    const asked = calls.map((c) => ({ id: c.id, function: { name: c.name, arguments: c.input } }))
+    messages = [...messages, { role: 'assistant', content: text, tool_calls: asked }, ...results]
+  }
+}
+
 /** `POST /v1/messages` and `POST /v1/messages/count_tokens` for Anthropic clients such as Claude Code. */
 export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
+  const search = o.search ?? duckDuckGo()
+
   async function body(req: IncomingMessage, res: ServerResponse) {
     try {
       return await readJson(req)
@@ -121,7 +261,6 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
     const context = tab.health().contextTokens
     if (context && estimate >= context) return refuse(400, 'invalid_request_error', tooLong(estimate, context - 1))
     const meta = { id, model: tab.modelName }
-    const { input, stopSequences } = parsed
 
     if (parsed.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' })
@@ -130,14 +269,14 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
       w.start(message(meta, [], { reason: null, sequence: null }, usage(estimate, 0)))
       const beat = setInterval(() => w.ping(), o.pingMs ?? PING_MS)
       try {
-        const out = await answer(
+        const out = await respond(
           tab,
-          input,
-          stopSequences,
+          parsed,
           estimate,
           gone,
-          { text: (t) => w.text(t), toolUse: (b) => w.toolUse(b) },
+          { text: (t) => w.text(t), toolUse: (b) => w.toolUse(b), searchResult: (b) => w.searchResult(b) },
           rlog,
+          search,
         )
         rlog.done(out.reason, out.usage.output_tokens)
         w.finish(out.reason, out.sequence, out.usage)
@@ -153,20 +292,23 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
       return
     }
 
-    let text = ''
+    // Text and searches in the order they came, text between searches merged; client calls last.
+    const blocks: ContentBlock[] = []
     const calls: ToolUseBlock[] = []
+    const collect: SearchSink = {
+      text: (t) => {
+        const last = blocks.at(-1)
+        if (last?.type === 'text') last.text += t
+        else if (t) blocks.push({ type: 'text', text: t })
+      },
+      toolUse: (b) => (b.type === 'tool_use' ? calls.push(b) : blocks.push(b)),
+      searchResult: (b) => blocks.push(b),
+    }
     try {
-      const out = await answer(
-        tab,
-        input,
-        stopSequences,
-        estimate,
-        gone,
-        { text: (t) => (text += t), toolUse: (b) => calls.push(b) },
-        rlog,
-      )
+      const out = await respond(tab, parsed, estimate, gone, collect, rlog, search)
       rlog.done(out.reason, out.usage.output_tokens)
-      sendJson(res, 200, message(meta, content(text, calls), { reason: out.reason, sequence: out.sequence }, out.usage))
+      const answered = blocks.length || calls.length ? [...blocks, ...calls] : content('', [])
+      sendJson(res, 200, message(meta, answered, { reason: out.reason, sequence: out.sequence }, out.usage))
     } catch (e) {
       if (gone.aborted) return rlog.aborted()
       const err = e as ChatError

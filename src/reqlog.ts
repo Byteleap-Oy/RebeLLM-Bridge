@@ -8,6 +8,8 @@ export interface RequestLog {
   queued(position: number): void
   /** Only the first call writes a line. */
   firstToken(): void
+  /** A web search the bridge ran: its result count or error code, never the query. */
+  searched(outcome: number | string): void
   done(reason: string, outputTokens: number): void
   aborted(): void
   error(e: unknown): void
@@ -39,6 +41,7 @@ export function requestLog(log: LogLine | undefined, route: string, id: string, 
       first = true
       line(`first token ${since()}`)
     },
+    searched: (o) => line(`search ${typeof o === 'number' ? count(o, 'result') : `error ${o}`} ${since()}`),
     done: (why, tokens) => line(`done ${why}, ${count(tokens, 'token')}, ${since()}`),
     aborted: () => line(`client aborted ${since()}`),
     error: (e) => line(`error ${reason(e)} ${since()}`),

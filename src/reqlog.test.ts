@@ -34,6 +34,19 @@ describe('requestLog', () => {
     ])
   })
 
+  it('logs each search by its result count or error, never the query', () => {
+    const { lines, log, advance } = setup()
+    advance(2500)
+    log.searched(8)
+    log.searched(1)
+    log.searched('unavailable')
+    expect(lines).toEqual([
+      'chat msg_ab12 /v1/messages: search 8 results +2.5s',
+      'chat msg_ab12 /v1/messages: search 1 result +2.5s',
+      'chat msg_ab12 /v1/messages: search error unavailable +2.5s',
+    ])
+  })
+
   it('says when the client gave up', () => {
     const { lines, log, advance } = setup('/v1/chat/completions', 'chatcmpl-1')
     log.arrived(1, 1)

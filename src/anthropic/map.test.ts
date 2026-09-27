@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { content, estimateTokens, message, stopReason, tabError, toChatInput, toolUse, usage } from './map.js'
+import {
+  MAX_USES,
+  SEARCH_SCHEMA,
+  content,
+  estimateTokens,
+  message,
+  stopReason,
+  tabError,
+  toChatInput,
+  toolUse,
+  usage,
+} from './map.js'
 
 const user = (content: unknown) => ({ role: 'user', content })
 
@@ -39,7 +50,7 @@ describe('toChatInput', () => {
       tools: [
         { name: 'Read', description: 'Reads a file', input_schema: { type: 'object', required: ['file_path'] } },
         { type: 'custom', name: 'Now' },
-        { type: 'web_search_20250305', name: 'web_search' },
+        { type: 'code_execution_20250522', name: 'code_execution' },
       ],
       stop_sequences: ['END', ''],
     })
@@ -76,6 +87,36 @@ describe('toChatInput', () => {
       stream: true,
       stopSequences: ['END'],
     })
+  })
+
+  it('offers the tab a web_search tool for the server tool, with its limits', () => {
+    const tools = (t: unknown[]) => toChatInput({ messages: [user('news?')], tools: t })
+    const r = tools([
+      { name: 'Read' },
+      {
+        type: 'web_search_20250305',
+        name: 'web_search',
+        max_uses: 3,
+        allowed_domains: ['hs.fi', 1],
+        blocked_domains: ['x.example'],
+      },
+    ])
+    expect(r).toMatchObject({ search: { maxUses: 3, allowed: ['hs.fi'], blocked: ['x.example'] } })
+    expect('input' in r && r.input.tools?.map((t) => t.function.name)).toEqual(['Read', 'web_search'])
+    expect('input' in r && r.input.tools?.at(-1)).toEqual(SEARCH_SCHEMA)
+    expect(tools([{ type: 'web_search_20260209', name: 'web_search', max_uses: 0 }])).toMatchObject({
+      search: { maxUses: MAX_USES, allowed: [], blocked: [] },
+    })
+    // A client tool of the same name keeps its calls on the client.
+    const own = tools([{ type: 'web_search_20250305', name: 'web_search' }, { name: 'web_search' }])
+    expect(own).not.toHaveProperty('search')
+    expect('input' in own && own.input.tools).toHaveLength(1)
+    const none = toChatInput({
+      messages: [user('x')],
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      tool_choice: { type: 'none' },
+    })
+    expect(none).not.toHaveProperty('search')
   })
 
   it('keeps text around tool results in order and marks failed tools', () => {

@@ -1,9 +1,18 @@
 import type { ServerResponse } from 'node:http'
-import type { ApiError, Message, StopReason, StreamEvent, ToolUseBlock, Usage } from './types.js'
+import type {
+  ApiError,
+  Message,
+  ServerToolUseBlock,
+  StopReason,
+  StreamEvent,
+  ToolUseBlock,
+  Usage,
+  WebSearchToolResultBlock,
+} from './types.js'
 
 /**
  * Writes one streamed message as the Messages API does: `message_start`, the content blocks
- * (a text block opened by the first text, one block per tool call), `message_delta`,
+ * (a text block opened by the first text, one block per tool call or search), `message_delta`,
  * `message_stop`.
  */
 export class EventWriter {
@@ -32,12 +41,20 @@ export class EventWriter {
     this.send({ type: 'content_block_delta', index: this.blocks, delta: { type: 'text_delta', text } })
   }
 
-  toolUse(block: ToolUseBlock) {
+  toolUse(block: ToolUseBlock | ServerToolUseBlock) {
     this.closeText()
     const index = this.blocks++
     this.send({ type: 'content_block_start', index, content_block: { ...block, input: {} } })
     const partial_json = JSON.stringify(block.input)
     this.send({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json } })
+    this.send({ type: 'content_block_stop', index })
+  }
+
+  /** A search's results arrive whole in the block's start, as Anthropic sends them. */
+  searchResult(block: WebSearchToolResultBlock) {
+    this.closeText()
+    const index = this.blocks++
+    this.send({ type: 'content_block_start', index, content_block: block })
     this.send({ type: 'content_block_stop', index })
   }
 
@@ -51,7 +68,11 @@ export class EventWriter {
     this.send({
       type: 'message_delta',
       delta: { stop_reason: reason, stop_sequence: sequence },
-      usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+      usage: {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        ...(usage.server_tool_use ? { server_tool_use: usage.server_tool_use } : {}),
+      },
     })
     this.send({ type: 'message_stop' })
     this.res.end()

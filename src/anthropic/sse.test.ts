@@ -56,6 +56,49 @@ describe('EventWriter', () => {
     expect(t.ended()).toBe(true)
   })
 
+  it('writes a search as a server tool use block and its results in one block start', () => {
+    const t = writer()
+    t.w.text('Searching.')
+    t.w.toolUse({ type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: 'hs' } })
+    const result = {
+      type: 'web_search_tool_result' as const,
+      tool_use_id: 's1',
+      content: [
+        {
+          type: 'web_search_result' as const,
+          url: 'https://hs.fi/',
+          title: 'HS',
+          encrypted_content: '',
+          page_age: null,
+        },
+      ],
+    }
+    t.w.searchResult(result)
+    t.w.text('Done.')
+    t.w.finish('end_turn', null, { ...usage(10, 4), server_tool_use: { web_search_requests: 1 } })
+    expect(t.events().slice(2)).toEqual([
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'server_tool_use', id: 's1', name: 'web_search', input: {} },
+      },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"query":"hs"}' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'content_block_start', index: 2, content_block: result },
+      { type: 'content_block_stop', index: 2 },
+      { type: 'content_block_start', index: 3, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: 'Done.' } },
+      { type: 'content_block_stop', index: 3 },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { input_tokens: 10, output_tokens: 4, server_tool_use: { web_search_requests: 1 } },
+      },
+      { type: 'message_stop' },
+    ])
+  })
+
   it('gives an empty answer one empty text block', () => {
     const t = writer()
     t.w.finish('end_turn', null, usage(1, 0))

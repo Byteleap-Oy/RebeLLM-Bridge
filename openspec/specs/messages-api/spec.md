@@ -47,10 +47,10 @@ as `tool_use` blocks with `stop_reason: 'tool_use'`, and map earlier `tool_use` 
 ### Requirement: Degraded input
 
 The bridge SHALL accept content it cannot pass on: image and document blocks become
-placeholder text, thinking blocks and server tools are dropped, a `system` message inside
-`messages` becomes a `user` message with its text in the same place (the tab's chat
-templates take a system message only at the start), and unsupported parameters are
-ignored.
+placeholder text, thinking blocks and server tools other than web search are dropped, a
+`system` message inside `messages` becomes a `user` message with its text in the same
+place (the tab's chat templates take a system message only at the start), and unsupported
+parameters are ignored.
 
 #### Scenario: Image in a user message
 
@@ -128,3 +128,35 @@ connected tab.
 
 - **WHEN** a client posts a messages body to `/v1/messages/count_tokens`
 - **THEN** the response is `{ input_tokens: n }` with n greater than zero
+
+### Requirement: Web search
+
+When a request's tools hold a server tool whose `type` starts with `web_search_` and no
+custom tool is named `web_search`, the bridge SHALL offer the tab a function tool
+`web_search` with a required string `query`. Each call the tab makes to it SHALL be run by
+the bridge as a search from this computer (DuckDuckGo), answered to the client as a
+`server_tool_use` block named `web_search` with the call's input followed by a
+`web_search_tool_result` block with at most 5 `web_search_result` items (`url`, `title`,
+`encrypted_content`, `page_age`) or a `web_search_tool_result_error`, and handed to the
+tab as a `tool` message listing each result's title, URL and snippet cut to 160 characters; the bridge SHALL
+then chat again with the tab until it answers without searching. It SHALL keep results
+to `allowed_domains` and drop `blocked_domains` (a host matches its domain and
+subdomains), allow at most `max_uses` searches per request (5 when absent) and answer
+further calls with error code `max_uses_exceeded`, and report the number of searches in
+`usage.server_tool_use.web_search_requests`. Each search SHALL write one request log line
+with its result count or error, never the query.
+
+#### Scenario: Search then answer
+
+- **WHEN** the request carries a `web_search_20250305` tool, the tab calls `web_search` with `{ query: 'hs.fi uutiset' }`, and then answers `Headlines: ...`
+- **THEN** the response holds a `server_tool_use` block with that input, a `web_search_tool_result` block with the results, the text `Headlines: ...`, and `stop_reason: 'end_turn'`, and the tab's second `chat` ends with the call and a `tool` message named `web_search` listing the results
+
+#### Scenario: Search fails
+
+- **WHEN** the search engine cannot be reached
+- **THEN** the result block holds a `web_search_tool_result_error` with `error_code: 'unavailable'`, and the tab is told the search failed and answers without it
+
+#### Scenario: Out of searches
+
+- **WHEN** `max_uses` is 1 and the tab calls `web_search` twice in one round
+- **THEN** the second result block holds `error_code: 'max_uses_exceeded'` and the next `chat` offers no `web_search` tool

@@ -3,6 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { ChatRequest } from '../protocol.js'
 import { FakeTab } from '../test/fake-tab.js'
 import { TOKEN, bridge } from '../test/harness.js'
+import { SearchError } from '../websearch.js'
 
 // Response bodies are checked by the assertions that read them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -345,6 +346,172 @@ describe('POST /v1/messages', () => {
     expect(rebound.status).toBe(403)
     expect(JSON.parse(rebound.body)).toMatchObject({ error: { type: 'permission_error' } })
     await expect(tab.nextChat(100)).rejects.toThrow('no matching frame')
+  })
+})
+
+describe('web search', () => {
+  const WEB = { type: 'web_search_20250305', name: 'web_search' }
+  const HS = [{ title: 'HS', url: 'https://www.hs.fi/', snippet: 'Uutiset' }]
+
+  /** A tab that searches with each of `queries` in turn, one call per round, then answers. */
+  function searcher(tab: FakeTab, queries: string[][], answer = 'Headlines: ...') {
+    const chats: ChatRequest[] = []
+    tab.onChat = (c) => {
+      const round = queries[chats.push(c) - 1]
+      if (!round) return tab.answer(c.id, [answer])
+      tab.send({
+        t: 'tool_call',
+        id: c.id,
+        calls: round.map((query, i) => ({
+          id: `${c.id}-s${i}`,
+          function: { name: 'web_search', arguments: { query } },
+        })),
+      })
+      done(tab, c.id, 'tool_call')
+    }
+    return chats
+  }
+
+  it('runs the tab’s search, gives it the results and returns the blocks Anthropic would', async () => {
+    const asked: [string, unknown][] = []
+    const b = await bridge({ search: async (q, o) => (asked.push([q, o?.allowed]), HS) })
+    const tab = await b.tab()
+    const chats = searcher(tab, [['hs.fi uutiset']])
+    const tools = [{ ...WEB, allowed_domains: ['hs.fi'] }]
+    const msg: Json = await (await post(b.base, { max_tokens: 99, tools, messages: [user('News?')] })).json()
+    expect(asked).toEqual([['hs.fi uutiset', ['hs.fi']]])
+    expect(msg.content).toEqual([
+      {
+        type: 'server_tool_use',
+        id: expect.stringMatching(/^srvtoolu_/),
+        name: 'web_search',
+        input: { query: 'hs.fi uutiset' },
+      },
+      {
+        type: 'web_search_tool_result',
+        tool_use_id: msg.content[0].id,
+        content: [
+          { type: 'web_search_result', url: 'https://www.hs.fi/', title: 'HS', encrypted_content: '', page_age: null },
+        ],
+      },
+      { type: 'text', text: 'Headlines: ...' },
+    ])
+    expect(msg.stop_reason).toBe('end_turn')
+    expect(msg.usage).toMatchObject({ output_tokens: 3, server_tool_use: { web_search_requests: 1 } })
+    expect(chats[0]?.tools?.map((t) => t.function.name)).toEqual(['web_search'])
+    expect(chats[1]?.messages.slice(1)).toEqual([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: expect.stringMatching(/-s0$/),
+            function: { name: 'web_search', arguments: { query: 'hs.fi uutiset' } },
+          },
+        ],
+      },
+      { role: 'tool', name: 'web_search', content: '1. HS\nhttps://www.hs.fi/\nUutiset' },
+    ])
+    const id = msg.id
+    expect(b.requests()).toEqual([
+      `chat ${id} /v1/messages: arrived, 32 prompt tokens, 1 tool`,
+      `chat ${id} /v1/messages: first token +Ns`,
+      `chat ${id} /v1/messages: search 1 result +Ns`,
+      `chat ${id} /v1/messages: done end_turn, 3 tokens, +Ns`,
+    ])
+    expect(b.lines.join('\n')).not.toMatch(/uutiset/)
+  })
+
+  it('streams the search blocks between the text', async () => {
+    const b = await bridge({ search: async () => HS })
+    const tab = await b.tab()
+    searcher(tab, [['hs']])
+    const all = await events(
+      await post(b.base, { max_tokens: 99, stream: true, tools: [WEB], messages: [user('News?')] }),
+    )
+    const starts = all.filter((e) => e.type === 'content_block_start').map((e) => e.content_block.type)
+    expect(starts).toEqual(['server_tool_use', 'web_search_tool_result', 'text'])
+    expect(all.find((e) => e.type === 'message_delta').usage).toMatchObject({
+      server_tool_use: { web_search_requests: 1 },
+    })
+  })
+
+  it('tells the tab when a search fails, and the client why', async () => {
+    const b = await bridge({
+      search: async () => {
+        throw new SearchError('unavailable', 'no answer within 15 s')
+      },
+    })
+    const tab = await b.tab()
+    const chats = searcher(tab, [['hs']], 'Could not search.')
+    const msg: Json = await (await post(b.base, { max_tokens: 99, tools: [WEB], messages: [user('News?')] })).json()
+    expect(msg.content[1].content).toEqual({ type: 'web_search_tool_result_error', error_code: 'unavailable' })
+    expect(msg.content[2]).toEqual({ type: 'text', text: 'Could not search.' })
+    expect(msg.usage).not.toHaveProperty('server_tool_use')
+    expect(chats[1]?.messages.at(-1)).toEqual({
+      role: 'tool',
+      name: 'web_search',
+      content: 'Error: the search failed (unavailable); answer without it.',
+    })
+    expect(b.requests()).toContain(`chat ${msg.id} /v1/messages: search error unavailable +Ns`)
+  })
+
+  it('stops searching at max_uses and then offers no search tool', async () => {
+    let searches = 0
+    const b = await bridge({ search: async () => (searches++, HS) })
+    const tab = await b.tab()
+    const chats = searcher(tab, [['a', 'b']])
+    const tools = [{ name: 'Read' }, { ...WEB, max_uses: 1 }]
+    const msg: Json = await (await post(b.base, { max_tokens: 99, tools, messages: [user('News?')] })).json()
+    expect(searches).toBe(1)
+    expect(msg.content.map((c: Json) => c.type)).toEqual([
+      'server_tool_use',
+      'web_search_tool_result',
+      'server_tool_use',
+      'web_search_tool_result',
+      'text',
+    ])
+    expect(msg.content[3].content).toEqual({ type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' })
+    expect(chats[1]?.tools?.map((t) => t.function.name)).toEqual(['Read'])
+    expect(chats[1]?.messages.at(-1)?.content).toBe('Error: no searches left; answer with what you have.')
+  })
+
+  it('ends the answer when the tab keeps searching with no search tool offered', async () => {
+    const b = await bridge({ search: async () => HS })
+    const tab = await b.tab()
+    const chats = searcher(tab, [['a'], ['b'], ['c']])
+    const tools = [{ ...WEB, max_uses: 1 }]
+    const msg: Json = await (await post(b.base, { max_tokens: 99, tools, messages: [user('x')] })).json()
+    expect(chats).toHaveLength(2)
+    expect(chats[1]).not.toHaveProperty('tools')
+    expect(msg.stop_reason).toBe('end_turn')
+    expect(msg.content.at(-1).content).toEqual({
+      type: 'web_search_tool_result_error',
+      error_code: 'max_uses_exceeded',
+    })
+  })
+
+  it('ends with the client’s tool calls when the tab asks for both', async () => {
+    const b = await bridge({ search: async () => HS })
+    const tab = await b.tab()
+    let chats = 0
+    tab.onChat = (c) => {
+      chats++
+      tab.send({
+        t: 'tool_call',
+        id: c.id,
+        calls: [
+          { id: 's', function: { name: 'web_search', arguments: { query: 'hs' } } },
+          { id: 'r', function: { name: 'Read', arguments: { file_path: 'a.ts' } } },
+        ],
+      })
+      done(tab, c.id, 'tool_call')
+    }
+    const tools = [{ name: 'Read' }, WEB]
+    const msg: Json = await (await post(b.base, { max_tokens: 99, tools, messages: [user('x')] })).json()
+    expect(chats).toBe(1)
+    expect(msg.stop_reason).toBe('tool_use')
+    expect(msg.content.map((c: Json) => c.type)).toEqual(['server_tool_use', 'web_search_tool_result', 'tool_use'])
   })
 })
 

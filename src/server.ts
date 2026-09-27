@@ -5,6 +5,7 @@ import { isMessagesPath, messagesRoutes, sendApiError } from './anthropic/routes
 import { MAX_BODY, pathOf } from './http.js'
 import { openaiRoutes, sendError } from './openai.js'
 import { TabLink } from './tab.js'
+import type { WebSearch } from './websearch.js'
 
 export const DEFAULT_PORT = 7343
 export const DEFAULT_HOST = '127.0.0.1'
@@ -20,6 +21,8 @@ export interface ServerOptions {
   requestLog?: (line: string) => void
   pingMs?: number
   silenceMs?: number
+  /** Runs `web_search` for the Messages API; tests hand in their own. */
+  search?: WebSearch
 }
 
 export interface BridgeServer {
@@ -50,7 +53,12 @@ export async function startServer(o: ServerOptions): Promise<BridgeServer> {
     ...(o.silenceMs ? { silenceMs: o.silenceMs } : {}),
   })
   const routes = openaiRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { keepAliveMs: o.keepAliveMs } : {}), log })
-  const messages = messagesRoutes(tab, { waitMs: o.waitMs, ...(o.keepAliveMs ? { pingMs: o.keepAliveMs } : {}), log })
+  const messages = messagesRoutes(tab, {
+    waitMs: o.waitMs,
+    ...(o.keepAliveMs ? { pingMs: o.keepAliveMs } : {}),
+    ...(o.search ? { search: o.search } : {}),
+    log,
+  })
   // On loopback, a foreign Host means a DNS-rebinding page; bound wider, the user chose it.
   const strictHost = isLoopback(o.host)
   const hostOk = (req: IncomingMessage) =>

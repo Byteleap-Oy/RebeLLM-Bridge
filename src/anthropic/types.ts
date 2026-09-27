@@ -15,7 +15,34 @@ export interface ToolUseBlock {
   input: Record<string, unknown>
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock
+/** A search the bridge ran for the model, as Anthropic reports its own. */
+export interface ServerToolUseBlock {
+  type: 'server_tool_use'
+  id: string
+  name: 'web_search'
+  input: Record<string, unknown>
+}
+
+export interface WebSearchResult {
+  type: 'web_search_result'
+  url: string
+  title: string
+  encrypted_content: string
+  page_age: string | null
+}
+
+export interface WebSearchError {
+  type: 'web_search_tool_result_error'
+  error_code: 'unavailable' | 'too_many_requests' | 'invalid_input' | 'query_too_long' | 'max_uses_exceeded'
+}
+
+export interface WebSearchToolResultBlock {
+  type: 'web_search_tool_result'
+  tool_use_id: string
+  content: WebSearchResult[] | WebSearchError
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ServerToolUseBlock | WebSearchToolResultBlock
 
 /** Request content blocks the mapping looks into; any other type is degraded or dropped. */
 export interface ToolResultBlockParam {
@@ -56,6 +83,7 @@ export interface Usage {
   output_tokens: number
   cache_creation_input_tokens: number
   cache_read_input_tokens: number
+  server_tool_use?: { web_search_requests: number }
 }
 
 export interface Message {
