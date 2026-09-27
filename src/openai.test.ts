@@ -64,6 +64,36 @@ describe('toChatInput', () => {
       },
       stream: true,
       includeUsage: true,
+      stop: [],
+    })
+  })
+
+  it('merges leading system messages and sends later ones as user messages', () => {
+    const r = toChatInput({
+      messages: [
+        { role: 'system', content: 'You are terse.' },
+        { role: 'developer', content: 'Use metric units.' },
+        user('hi'),
+        { role: 'assistant', content: 'hello' },
+        { role: 'developer', content: 'be brief' },
+        user('go'),
+      ],
+    })
+    expect((r as { input: { messages: unknown[] } }).input.messages).toEqual([
+      { role: 'system', content: 'You are terse.\n\nUse metric units.' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+      { role: 'user', content: 'be brief' },
+      { role: 'user', content: 'go' },
+    ])
+  })
+
+  it('reads stop as a string or a list', () => {
+    expect(toChatInput({ messages: [user('x')], stop: '\n' })).toMatchObject({ stop: ['\n'] })
+    expect(toChatInput({ messages: [user('x')], stop: ['a', '', 'b'] })).toMatchObject({ stop: ['a', 'b'] })
+    expect(toChatInput({ messages: [user('x')], stop: null })).toMatchObject({ stop: [] })
+    expect(toChatInput({ messages: [user('x')], stop: [1] })).toEqual({
+      error: '`stop` must be a string or an array of strings',
     })
   })
 
@@ -109,13 +139,9 @@ describe('toChatInput', () => {
 describe('completion', () => {
   it('shapes an answer with tool calls like OpenAI', () => {
     const r = completion(
-      {
-        id: 'x',
-        text: '',
-        calls: [{ id: 'x-call-1', function: { name: 'f', arguments: { a: 1 } } }],
-        stop: 'tool_call',
-        usage: { prompt: 5, completion: 3, tokensPerSec: 9 },
-      },
+      '',
+      [{ id: 'x-call-1', function: { name: 'f', arguments: { a: 1 } } }],
+      { finish: 'tool_calls', usage: { prompt: 5, completion: 3, tokensPerSec: 9 } },
       { id: 'chatcmpl-1', created: 1, model: 'm' },
     )
     expect(r.choices[0]).toEqual({
@@ -319,6 +345,50 @@ describe('/v1/chat/completions', () => {
     ctl.abort()
     await req
     expect(await tab.next((m) => m.t === 'abort')).toEqual({ t: 'abort', id: chat.id })
+  })
+
+  it('ends at a stop sequence, streamed or not, and aborts the tab’s chat', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    const body = { messages: [user('go')], stop: ['\nObservation:'] }
+    const plain = post(b.base, body)
+    let chat = await tab.nextChat()
+    tab.send({ t: 'token', id: chat.id, text: 'Action: search\nObs' })
+    tab.send({ t: 'token', id: chat.id, text: 'ervation: fake' })
+    expect(await tab.next((m) => m.t === 'abort')).toEqual({ t: 'abort', id: chat.id })
+    const r: Json = await json(plain)
+    expect(r.choices[0]).toMatchObject({ message: { content: 'Action: search' }, finish_reason: 'stop' })
+
+    const streamed = post(b.base, { ...body, stop: 'END', stream: true })
+    chat = await tab.nextChat()
+    tab.send({ t: 'token', id: chat.id, text: 'ok E' })
+    tab.send({ t: 'token', id: chat.id, text: 'ND more' })
+    expect(await tab.next((m) => m.t === 'abort')).toEqual({ t: 'abort', id: chat.id })
+    const chunks = (await sse(await streamed)).slice(0, -1).map((d) => JSON.parse(d))
+    expect(chunks.map((c) => c.choices[0]?.delta?.content).filter(Boolean)).toEqual(['ok '])
+    expect(chunks.at(-1).choices[0].finish_reason).toBe('stop')
+  })
+
+  it('answers 400 context_length_exceeded for a prompt the tab cannot hold, without sending it', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    const huge = 'x'.repeat(32768 * 4)
+    const r = await post(b.base, { messages: [user(huge)] })
+    expect(r.status).toBe(400)
+    expect(await r.json()).toMatchObject({ error: { type: 'invalid_request_error', code: 'context_length_exceeded' } })
+    await expect(tab.nextChat(100)).rejects.toThrow()
+
+    const tooLong = "The prompt needs 50000 tokens; the tab's context holds 32768"
+    tab.onChat = (c) => tab.send({ t: 'error', id: c.id, message: tooLong })
+    const plain = await post(b.base, { messages: [user('x')] })
+    expect(plain.status).toBe(400)
+    expect(await plain.json()).toMatchObject({
+      error: { code: 'context_length_exceeded', message: expect.stringContaining('50000 tokens') },
+    })
+    const data = await sse(await post(b.base, { messages: [user('x')], stream: true }))
+    expect(JSON.parse(data.at(-1)!)).toMatchObject({
+      error: { type: 'invalid_request_error', code: 'context_length_exceeded' },
+    })
   })
 
   it('answers 400 for a body that is not a chat request', async () => {

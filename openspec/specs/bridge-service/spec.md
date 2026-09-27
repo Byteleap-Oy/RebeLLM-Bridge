@@ -58,7 +58,10 @@ On start it SHALL print the addresses for the tab, OpenAI clients and Anthropic 
 The bridge SHALL answer `POST /v1/chat/completions` with and without streaming and `GET
 /v1/models`, forwarding the request's tools to the tab and returning tool calls in the
 OpenAI shape, and SHALL answer 503 with the reason when no tab or model is available after
-the wait time. HTTP requests from web pages (an `Origin` header) SHALL be refused.
+the wait time. HTTP requests from web pages (an `Origin` header) SHALL be refused. It SHALL
+end the answer at the first match of `stop` without emitting it, merge leading `system` and
+`developer` messages into one system message and send later ones as user messages, and
+answer a prompt that does not fit the tab's context with 400 `context_length_exceeded`.
 
 #### Scenario: Streamed completion
 
@@ -74,6 +77,21 @@ the wait time. HTTP requests from web pages (an `Origin` header) SHALL be refuse
 
 - **WHEN** a client posts a chat and no tab connects within the wait time
 - **THEN** it receives 503 with `no RebeLLM tab connected`
+
+#### Scenario: Stop string
+
+- **WHEN** a client posts `stop: ["\nObservation:"]` and the tab streams `Action: search\nObservation: fake`
+- **THEN** the answer is `Action: search` with `finish_reason: 'stop'` and the tab receives `abort`
+
+#### Scenario: Late system message
+
+- **WHEN** a client posts a `developer` message after an assistant message
+- **THEN** the tab receives it as a user message
+
+#### Scenario: Prompt too long
+
+- **WHEN** the estimated prompt exceeds the tab's `contextTokens`, or the tab answers that the prompt does not fit
+- **THEN** the response is 400 `invalid_request_error` with code `context_length_exceeded`
 
 ### Requirement: MCP server for Claude Code
 

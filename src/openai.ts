@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { estimateTokens } from './anthropic/map.js'
+import { estimateTokens, tabTooLong } from './anthropic/map.js'
+import { StopMatcher } from './anthropic/stop.js'
 import { HttpError, clientGone, pathOf, readJson, sendJson } from './http.js'
 import type { ChatMessage, ToolCall, ToolSchema, Usage } from './protocol.js'
 import { requestLog, type LogLine, type RequestLog } from './reqlog.js'
@@ -26,7 +27,8 @@ export function sendError(res: ServerResponse, status: number, message: string, 
   sendJson(res, status, { error: { message, type, code: code ?? null } })
 }
 
-export type ParsedRequest = { input: ChatInput; stream: boolean; includeUsage: boolean } | { error: string }
+export type ParsedRequest =
+  { input: ChatInput; stream: boolean; includeUsage: boolean; stop: string[] } | { error: string }
 
 const ROLES: Record<string, ChatMessage['role']> = {
   system: 'system',
@@ -95,6 +97,14 @@ export function toChatInput(body: unknown): ParsedRequest {
     if (!role) return { error: `messages[${i}].role ${JSON.stringify(m.role)} is not supported` }
     const content = contentText(m.content)
     if (content === null) return { error: `messages[${i}].content must be a string or an array of parts` }
+    // Chat templates take system text only at the start (Qwen's raises otherwise): leading ones
+    // merge into one, later ones go as user messages, as on the Anthropic route.
+    if (role === 'system') {
+      const prev = messages.at(-1)
+      if (messages.every((x) => x.role === 'system') && prev) prev.content += `\n\n${content}`
+      else messages.push({ role: messages.length ? 'user' : 'system', content })
+      continue
+    }
     const out: ChatMessage = { role, content }
     if (role === 'assistant' && m.tool_calls !== undefined && m.tool_calls !== null) {
       if (!Array.isArray(m.tool_calls)) return { error: `messages[${i}].tool_calls must be an array` }
@@ -132,8 +142,67 @@ export function toChatInput(body: unknown): ParsedRequest {
       return { error: '`temperature` must be a number of at least 0' }
     input.temperature = temp
   }
+  let stop: string[] = []
+  if (isStr(body.stop)) stop = [body.stop]
+  else if (Array.isArray(body.stop) && body.stop.every(isStr)) stop = body.stop
+  else if (body.stop !== undefined && body.stop !== null)
+    return { error: '`stop` must be a string or an array of strings' }
   const includeUsage = isObj(body.stream_options) && body.stream_options.include_usage === true
-  return { input, stream: body.stream === true, includeUsage }
+  return { input, stream: body.stream === true, includeUsage, stop: stop.filter((x) => x.length > 0) }
+}
+
+/** OpenAI's wording and code for a prompt over the model's context. */
+export const contextError = (tokens: number, max: number) => ({
+  message: `This model's maximum context length is ${max} tokens. However, your messages resulted in ${tokens} tokens. Please reduce the length of the messages.`,
+  code: 'context_length_exceeded',
+})
+
+interface Answer {
+  finish: string
+  usage: Usage
+}
+
+interface Sink {
+  text(text: string): void
+  calls(calls: ToolCall[]): void
+}
+
+/** Runs one chat, passing text through the stop sequences; a match aborts the chat and finishes with `stop`. */
+async function answer(
+  tab: TabLink,
+  input: ChatInput,
+  stops: string[],
+  signal: AbortSignal,
+  sink: Sink,
+  rlog: RequestLog,
+): Promise<Answer> {
+  const matcher = new StopMatcher(stops)
+  const halt = new AbortController()
+  let frames = 0
+  try {
+    const r = await tab.chat(input, {
+      signal: AbortSignal.any([signal, halt.signal]),
+      onEvent: (e) => {
+        if (e.t === 'queued') return rlog.queued(e.position)
+        rlog.firstToken()
+        if (e.t === 'token') {
+          frames++
+          sink.text(matcher.push(e.text))
+          if (matcher.matched !== null) halt.abort()
+        } else {
+          // Held text belongs before the call, and no stop sequence spans a tool call.
+          sink.text(matcher.flush())
+          sink.calls(e.calls)
+        }
+      },
+    })
+    sink.text(matcher.flush())
+    return { finish: finishReason(r), usage: r.usage }
+  } catch (e) {
+    if (matcher.matched === null || signal.aborted) throw e
+    // The tab's `done` is not awaited after the abort, so the count is the bridge's own.
+    return { finish: 'stop', usage: { prompt: estimateTokens(input), completion: frames, tokensPerSec: 0 } }
+  }
 }
 
 const finishReason = (r: ChatResult) =>
@@ -154,8 +223,13 @@ const toolCall = (c: ToolCall) => ({
 })
 
 /** A non-streamed answer in OpenAI's shape. */
-export function completion(r: ChatResult, meta: { id: string; created: number; model: string }) {
-  const calls = r.calls.map(toolCall)
+export function completion(
+  text: string,
+  toolCalls: ToolCall[],
+  a: Answer,
+  meta: { id: string; created: number; model: string },
+) {
+  const calls = toolCalls.map(toolCall)
   return {
     ...meta,
     object: 'chat.completion',
@@ -165,13 +239,13 @@ export function completion(r: ChatResult, meta: { id: string; created: number; m
         message: {
           role: 'assistant',
           // OpenAI sends null content beside tool calls when there is no text.
-          content: calls.length && !r.text ? null : r.text,
+          content: calls.length && !text ? null : text,
           ...(calls.length ? { tool_calls: calls } : {}),
         },
-        finish_reason: finishReason(r),
+        finish_reason: a.finish,
       },
     ],
-    usage: usage(r.usage),
+    usage: usage(a.usage),
   }
 }
 
@@ -196,15 +270,29 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
       rlog.refused(503, missing.message)
       return sendError(res, 503, missing.message, 'service_unavailable', missing.code)
     }
+    // A prompt that cannot fit is a client error, which SDKs do not retry.
+    const estimate = estimateTokens(parsed.input)
+    const context = tab.health().contextTokens
+    if (context && estimate >= context) {
+      const c = contextError(estimate, context)
+      rlog.refused(400, c.message)
+      return sendError(res, 400, c.message, 'invalid_request_error', c.code)
+    }
     const meta = { id, created: Math.floor(Date.now() / 1000), model: tab.modelName }
-    if (parsed.stream) return stream(res, parsed.input, parsed.includeUsage, meta, gone, rlog)
+    if (parsed.stream) return stream(res, parsed, meta, gone, rlog)
+    let text = ''
+    const calls: ToolCall[] = []
     try {
-      const r = await tab.chat(parsed.input, {
-        signal: gone,
-        onEvent: (e) => (e.t === 'queued' ? rlog.queued(e.position) : rlog.firstToken()),
-      })
-      rlog.done(finishReason(r), r.usage.completion)
-      sendJson(res, 200, completion(r, meta))
+      const a = await answer(
+        tab,
+        parsed.input,
+        parsed.stop,
+        gone,
+        { text: (t) => (text += t), calls: (c) => calls.push(...c) },
+        rlog,
+      )
+      rlog.done(a.finish, a.usage.completion)
+      sendJson(res, 200, completion(text, calls, a, meta))
     } catch (e) {
       if (gone.aborted) return rlog.aborted()
       const err = e as ChatError
@@ -213,14 +301,18 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
         return sendError(res, 503, err.message, 'service_unavailable', 'no_tab')
       }
       rlog.error(err)
+      const big = tabTooLong(err.message)
+      if (big) {
+        const c = contextError(big.tokens, big.max)
+        return sendError(res, 400, c.message, 'invalid_request_error', c.code)
+      }
       sendError(res, 502, err.message, 'api_error', err.kind === 'disconnected' ? 'tab_disconnected' : 'tab_error')
     }
   }
 
   async function stream(
     res: ServerResponse,
-    input: ChatInput,
-    includeUsage: boolean,
+    parsed: Extract<ParsedRequest, { input: ChatInput }>,
     meta: { id: string; created: number; model: string },
     signal: AbortSignal,
     rlog: RequestLog,
@@ -235,27 +327,35 @@ export function openaiRoutes(tab: TabLink, o: RouteOptions) {
     const beat = setInterval(() => res.write(': keep-alive\n\n'), o.keepAliveMs ?? KEEPALIVE_MS)
     let calls = 0
     try {
-      const r = await tab.chat(input, {
+      const a = await answer(
+        tab,
+        parsed.input,
+        parsed.stop,
         signal,
-        onEvent: (e) => {
-          if (e.t === 'queued') return rlog.queued(e.position)
-          rlog.firstToken()
-          if (e.t === 'token') chunk({ content: e.text })
-          else {
-            chunk({ tool_calls: e.calls.map((c, i) => ({ index: calls + i, ...toolCall(c) })) })
-            calls += e.calls.length
-          }
+        {
+          text: (t) => t && chunk({ content: t }),
+          calls: (cs) => {
+            chunk({ tool_calls: cs.map((c, i) => ({ index: calls + i, ...toolCall(c) })) })
+            calls += cs.length
+          },
         },
-      })
-      rlog.done(finishReason(r), r.usage.completion)
-      chunk({}, finishReason(r))
-      if (includeUsage) write({ ...meta, object: 'chat.completion.chunk', choices: [], usage: usage(r.usage) })
+        rlog,
+      )
+      rlog.done(a.finish, a.usage.completion)
+      chunk({}, a.finish)
+      if (parsed.includeUsage) write({ ...meta, object: 'chat.completion.chunk', choices: [], usage: usage(a.usage) })
       res.end('data: [DONE]\n\n')
     } catch (e) {
       if (signal.aborted) return rlog.aborted()
       rlog.error(e)
+      const message = (e as Error).message
+      const big = tabTooLong(message)
       // OpenAI's SDKs raise an error for a data chunk that carries one.
-      write({ error: { message: (e as Error).message, type: 'api_error', code: null } })
+      write({
+        error: big
+          ? { ...contextError(big.tokens, big.max), type: 'invalid_request_error' }
+          : { message, type: 'api_error', code: null },
+      })
       res.end()
     } finally {
       clearInterval(beat)

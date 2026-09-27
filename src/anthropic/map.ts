@@ -201,12 +201,16 @@ export const tooLong = (tokens: number, max: number) => `prompt is too long: ${t
 // The RebeLLM tab's wording when a prompt does not fit its context.
 const TAB_TOO_LONG = /^The prompt needs (\d+) tokens; the tab's context holds (\d+)/
 
+/** The sizes in the tab's "prompt does not fit" error; null for any other error. */
+export function tabTooLong(message: string): { tokens: number; max: number } | null {
+  const m = TAB_TOO_LONG.exec(message)
+  return m ? { tokens: Number(m[1]), max: Number(m[2]) } : null
+}
+
 /** A failed chat as an API error; the tab's "prompt does not fit" becomes Claude Code's "too long". */
 export function tabError(message: string): ApiError {
-  const m = TAB_TOO_LONG.exec(message)
-  return m
-    ? { type: 'invalid_request_error', message: tooLong(Number(m[1]), Number(m[2])) }
-    : { type: 'api_error', message }
+  const t = tabTooLong(message)
+  return t ? { type: 'invalid_request_error', message: tooLong(t.tokens, t.max) } : { type: 'api_error', message }
 }
 
 export function stopReason(stop: TabStop, calls: number): StopReason {
