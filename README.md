@@ -117,9 +117,11 @@ Page fetch: the tab may send `fetch` (id, url) for a page that does not let web 
 it; the bridge reads it from this computer and answers `fetched` (id, status, type, finalUrl,
 text, cut) or `error` (id, message). Only `http` and `https`; every hop's address is resolved
 and refused unless public (no loopback, private, link-local, CGNAT, multicast, reserved or
-unique-local addresses, also in IPv4-mapped forms, and none of this computer's own
-interface addresses, such as its global IPv6), and the checked address is the one dialled; at most five redirects; no cookies or credentials; text types only (HTML, plain,
-Markdown, JSON, XML); 2 MB (longer text comes back `cut`) and 15 s; 30 fetches a minute. The
+unique-local addresses, also in IPv4-mapped forms, and nothing on the networks of this
+computer's own interfaces, such as its global IPv6 /64), and the checked address is the one
+dialled; at most five redirects; no cookies or credentials; text types only (HTML, plain,
+Markdown, JSON, XML); 2 MB (longer text comes back `cut`) and 15 s, name lookup included;
+30 fetches a minute. The
 request log gets one line per fetch naming the host only (`--quiet` silences it).
 
 ## Development

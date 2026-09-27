@@ -8,6 +8,8 @@ import {
   USER_AGENT,
   canonicalAddress,
   checkedDialer,
+  inNetwork,
+  networkOf,
   fetchLine,
   isPublicAddress,
   pageFetch,
@@ -16,7 +18,7 @@ import {
   type Lookup,
 } from './pagefetch.js'
 
-const os = vi.hoisted(() => ({ interfaces: {} as Record<string, { address: string }[]> }))
+const os = vi.hoisted(() => ({ interfaces: {} as Record<string, { address: string; cidr?: string }[]> }))
 vi.mock('node:os', async (actual) => ({
   ...(await actual<typeof import('node:os')>()),
   networkInterfaces: () => os.interfaces,
@@ -108,6 +110,41 @@ describe('canonicalAddress', () => {
   })
 })
 
+describe('networkOf and inNetwork', () => {
+  it('matches addresses inside a CIDR in any spelling, and a bare address alone', () => {
+    const v6 = networkOf('2606:4700:1:2:a:b:c:d/64')!
+    expect(inNetwork('2606:4700:1:2::1', v6)).toBe(true)
+    expect(inNetwork('[2606:4700:1:2:FFFF::]', v6)).toBe(true)
+    expect(inNetwork('2606:4700:1:3::1', v6)).toBe(false)
+    const v4 = networkOf('8.8.4.4/24')!
+    expect(inNetwork('8.8.4.200', v4)).toBe(true)
+    expect(inNetwork('::ffff:8.8.4.1', v4)).toBe(true)
+    expect(inNetwork('8.8.5.1', v4)).toBe(false)
+    expect(inNetwork('2606:4700:1:2::1', v4)).toBe(false)
+    const odd = networkOf('8.8.4.4/22')!
+    expect(inNetwork('8.8.7.255', odd)).toBe(true)
+    expect(inNetwork('8.8.8.0', odd)).toBe(false)
+    const bare = networkOf('2606:4700:1:2::5')!
+    expect(inNetwork('2606:4700:1:2::5', bare)).toBe(true)
+    expect(inNetwork('2606:4700:1:2::6', bare)).toBe(false)
+    expect(networkOf('nonsense/24')).toBeNull()
+  })
+
+  it('shrinks prefixes wider than /16 or /32 to the address itself', () => {
+    for (const [cidr, inside, outside] of [
+      ['8.8.4.4/8', '8.8.4.4', '8.9.0.1'],
+      ['8.8.4.4/0', '8.8.4.4', '1.1.1.1'],
+      ['2606:4700::5/16', '2606:4700::5', '2606:1::1'],
+      ['8.8.4.4/x', '8.8.4.4', '8.8.4.5'],
+    ] as const) {
+      const n = networkOf(cidr)!
+      expect(inNetwork(inside, n), cidr).toBe(true)
+      expect(inNetwork(outside, n), cidr).toBe(false)
+    }
+    expect(inNetwork('8.8.200.1', networkOf('8.8.4.4/16')!)).toBe(true)
+  })
+})
+
 describe('pageFetch', () => {
   it('reads a public page from the checked address, without cookies or credentials', async () => {
     const { dial, calls } = dialer({
@@ -187,11 +224,23 @@ describe('pageFetch', () => {
     expect(calls.map((c) => c.url)).toEqual(['https://a.example/'])
   })
 
+  it("refuses other devices on this computer's networks, such as the router", async () => {
+    const ownAddresses = () => ['2606:4700:1:2:a1b2:c3d4:e5f6:1234/64', '8.8.4.4/24', '127.0.0.1/8']
+    const lookup = dns({ 'router.example': ['2606:4700:1:2::1'], 'far.example': ['2606:4700:1:3::1'] })
+    const { dial, calls } = dialer({ 'http://far.example/': () => page('far', 'text/plain') })
+    const o = { lookup, dial, ownAddresses }
+    await refused(pageFetch('http://[2606:4700:1:2::1]/', o), /is not a public address$/)
+    await refused(pageFetch('http://router.example/', o), /^router\.example is not a public address$/)
+    await refused(pageFetch('http://8.8.4.1/', o), /is not a public address$/)
+    expect(await pageFetch('http://far.example/', o)).toMatchObject({ text: 'far' })
+    expect(calls.map((c) => c.url)).toEqual(['http://far.example/'])
+  })
+
   it('reads the network interfaces on every fetch by default', async () => {
     const { dial } = dialer({ 'http://self.example/': () => page('hi', 'text/plain') })
     const o = { lookup: dns({ 'self.example': ['2606:4700:1::7'] }), dial }
     expect(await pageFetch('http://self.example/', o)).toMatchObject({ text: 'hi' })
-    os.interfaces = { eth0: [{ address: '2606:4700:1::7' }] }
+    os.interfaces = { eth0: [{ address: '2606:4700:1::9', cidr: '2606:4700:1::9/64' }] }
     try {
       await refused(pageFetch('http://self.example/', o), /not a public address/)
     } finally {
@@ -266,6 +315,20 @@ describe('pageFetch', () => {
     await refused(pending, /^cancelled$/)
     const { dial } = dialer({})
     await refused(pageFetch('https://slow.example/', { lookup, dial }), /^could not fetch: connect ECONNREFUSED/)
+  })
+
+  it('counts the name lookup in the time cap and stops it when cancelled', async () => {
+    const stuck: Lookup = () => new Promise(() => undefined)
+    const { dial } = dialer({})
+    await refused(
+      pageFetch('https://stuck.example/', { lookup: stuck, dial, timeoutMs: 30 }),
+      /^no answer within 0\.03 s$/,
+    )
+    const ctl = new AbortController()
+    const pending = pageFetch('https://stuck.example/', { lookup: stuck, dial, signal: ctl.signal })
+    setTimeout(() => ctl.abort(), 10)
+    await refused(pending, /^cancelled$/)
+    expect(dial).not.toHaveBeenCalled()
   })
 })
 

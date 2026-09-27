@@ -127,9 +127,56 @@ export function canonicalAddress(address: string): string | null {
   return g.map((x) => x.toString(16)).join(':')
 }
 
+/** An address as eight 16-bit groups, IPv4 in its mapped form; null when unparsable. */
+function groupsOf(address: string): number[] | null {
+  const c = canonicalAddress(address)
+  if (c === null) return null
+  const n = v4(c)
+  return n === null ? v6(c) : [0, 0, 0, 0, 0, 0xffff, n >>> 16, n & 0xffff]
+}
+
+interface Network {
+  groups: number[]
+  bits: number
+}
+
+/**
+ * An address or CIDR as a network. Prefixes wider than /16 (IPv4) or /32 (IPv6) shrink to
+ * the address itself: no real on-link network is that wide, and they would block the internet.
+ */
+export function networkOf(entry: string): Network | null {
+  const [address = '', prefix] = entry.split('/')
+  const groups = groupsOf(address)
+  if (!groups) return null
+  const isV4 = v4(canonicalAddress(address)!) !== null
+  const bits = prefix === undefined ? 128 : Number(prefix) + (isV4 ? 96 : 0)
+  const narrow = Number.isInteger(bits) && bits >= (isV4 ? 112 : 32) && bits <= 128
+  return { groups, bits: narrow ? bits : 128 }
+}
+
+export function inNetwork(address: string, n: Network): boolean {
+  const g = groupsOf(address)
+  if (!g) return false
+  for (let i = 0, left = n.bits; left > 0; i++, left -= 16) {
+    const mask = left >= 16 ? 0xffff : (0xffff << (16 - left)) & 0xffff
+    if ((g[i]! & mask) !== (n.groups[i]! & mask)) return false
+  }
+  return true
+}
+
 // Read per fetch: IPv6 privacy addresses rotate.
-const interfaceAddresses = () =>
-  Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((i) => i.address))
+const interfaceNetworks = () =>
+  Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((i) => i.cidr ?? i.address))
+
+/** Settles like `p`, or rejects as soon as `signal` aborts. */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const stop = () => reject(signal.reason)
+    signal.addEventListener('abort', stop, { once: true })
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
+  })
+}
 
 export interface Resolved {
   address: string
@@ -189,14 +236,19 @@ function target(raw: string, base?: URL): URL {
   return u
 }
 
-async function resolve(url: URL, lookup: Lookup, mine: Set<string>): Promise<Resolved> {
+async function resolve(url: URL, lookup: Lookup, local: Network[], signal: AbortSignal): Promise<Resolved> {
   const host = url.hostname.replace(/^\[|\]$/g, '')
   const family = isIP(host)
-  const addrs = family ? [{ address: host, family }] : await lookup(host).catch(() => [])
+  const addrs = family
+    ? [{ address: host, family }]
+    : await untilAborted(
+        lookup(host).catch(() => []),
+        signal,
+      )
   if (!addrs.length) throw new PageFetchError(`${host} does not resolve`)
   // One private answer is enough: the connection could pick it.
-  // This computer's own public addresses reach its local services too.
-  const refused = (a: string) => !isPublicAddress(a) || mine.has(canonicalAddress(a)!)
+  // Public addresses on this computer's own networks reach the user's devices too.
+  const refused = (a: string) => !isPublicAddress(a) || local.some((n) => inNetwork(a, n))
   if (addrs.some((a) => refused(a.address))) throw new PageFetchError(`${host} is not a public address`)
   return addrs[0]!
 }
@@ -237,7 +289,7 @@ export interface PageFetchOptions {
   lookup?: Lookup
   /** Tests hand in their own; one checkedDialer per fetch by default. */
   dial?: Dial
-  /** This computer's addresses; the network interfaces by default. */
+  /** This computer's addresses or CIDRs; the network interfaces by default. */
   ownAddresses?: () => string[]
   maxBytes?: number
   timeoutMs?: number
@@ -254,14 +306,12 @@ export async function pageFetch(raw: string, o: PageFetchOptions = {}): Promise<
   const own = o.dial ? null : checkedDialer()
   const dial = o.dial ?? own!.dial
   try {
-    const mine = new Set(
-      (o.ownAddresses ?? interfaceAddresses)()
-        .map(canonicalAddress)
-        .filter((a) => a !== null),
-    )
+    const local = (o.ownAddresses ?? interfaceNetworks)()
+      .map(networkOf)
+      .filter((n) => n !== null)
     let url = target(raw)
     for (let hop = 0; ; hop++) {
-      const { address, family } = await resolve(url, lookup, mine)
+      const { address, family } = await resolve(url, lookup, local, signal)
       signal.throwIfAborted()
       const up = await dial(url, { address, family, headers: { ...HEADERS }, signal })
       const location = up.headers.get('location')

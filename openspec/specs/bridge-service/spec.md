@@ -93,10 +93,10 @@ refusal, or an error; message content SHALL never be logged; `--quiet` SHALL sil
 The bridge SHALL list `fetch` in its `ok` features and, on a tab's `{ t: 'fetch', id, url }`,
 SHALL fetch the page from this computer and answer `fetched` with status, type, final URL,
 text and whether it was cut, or an `error`; it SHALL accept only `http` and `https`, refuse
-any hop whose address is not public or belongs to one of this computer's own network
-interfaces and dial the checked address, follow at most five redirects, send no cookies or
-credentials, pass text types only, stop at 2 MB and 15 s, allow 30 fetches a minute, and log
-each fetch by host only.
+any hop whose address is not public or lies in the network of one of this computer's own
+network interfaces and dial the checked address, follow at most five redirects, send no
+cookies or credentials, pass text types only, stop at 2 MB and 15 s including the name
+lookup, allow 30 fetches a minute, and log each fetch by host only.
 
 #### Scenario: Public page
 - **WHEN** the tab asks for `https://docs.python.org/3/library/json.html`
@@ -110,6 +110,14 @@ each fetch by host only.
 - **WHEN** this computer has the global IPv6 address `2001:db8:1::5` and the tab asks for
   `http://[2001:db8:1::5]:8080/`, a host resolving to it, or a page that redirects there
 - **THEN** the bridge answers an error without connecting to that address
+
+#### Scenario: A device on this computer's network
+- **WHEN** this computer has `2001:db8:1::5/64` and the tab asks for `http://[2001:db8:1::1]/`
+- **THEN** the bridge answers an error without connecting to that address
+
+#### Scenario: Stuck name lookup
+- **WHEN** the name lookup for a page does not answer
+- **THEN** the bridge answers an error after 15 s
 
 ### Requirement: Request body limit
 The bridge SHALL refuse a request body over 8 MiB with status 413 in the endpoint's error
