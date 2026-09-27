@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { WebSocketServer } from 'ws'
 import { isMessagesPath, messagesRoutes, sendApiError } from './anthropic/routes.js'
-import { pathOf } from './http.js'
+import { MAX_BODY, pathOf } from './http.js'
 import { openaiRoutes, sendError } from './openai.js'
 import { TabLink } from './tab.js'
 
@@ -67,7 +67,8 @@ export async function startServer(o: ServerOptions): Promise<BridgeServer> {
     if (anthropic) return messages(req, res)
     routes(req, res)
   })
-  const wss = new WebSocketServer({ noServer: true })
+  // Tab frames are small; a tool call bigger than a request body could not be sent back anyway.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY })
   server.on('upgrade', (req, socket, head) => {
     if (!hostOk(req)) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')

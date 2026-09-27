@@ -85,6 +85,22 @@ describe('TabLink', () => {
     expect(code).toBe(CLOSE.helloFirst)
   })
 
+  it('checks one hello per connection and drops a connection that does not say hello in time', async () => {
+    const { tab, url, lines } = await link({ helloMs: 100 })
+    const wrong = await FakeTab.open(url, { token: 'nope' })
+    for (let i = 0; i < 5; i++) wrong.send({ t: 'hello', v: 1, token: TOKEN, model: '', contextTokens: 0, app: 't' })
+    expect(await wrong.next()).toMatchObject({ t: 'error', code: 'auth' })
+    expect((await wrong.closed).code).toBe(CLOSE.auth)
+    expect(tab.connected).toBe(false)
+    expect(lines.filter((l) => l.startsWith('refused a tab'))).toEqual(['refused a tab: wrong token'])
+
+    const { WebSocket } = await import('ws')
+    const mute = new WebSocket(url)
+    await once(mute, 'open')
+    const [code] = (await once(mute, 'close')) as [number]
+    expect(code).toBe(1006)
+  })
+
   it('answers a second tab with busy and keeps the first', async () => {
     const { tab, ready, open } = await link()
     const first = await ready()

@@ -20,6 +20,8 @@ import {
 
 export const PING_MS = 20_000
 export const SILENCE_MS = 50_000
+/** A new connection has this long to say `hello`. */
+export const HELLO_MS = 10_000
 
 /** Close codes for a refused `hello`, as the app's stand-in bridge uses them. */
 export const CLOSE = { auth: 4000, version: 4001, busy: 4002, helloFirst: 4003 } as const
@@ -78,6 +80,7 @@ export interface TabLinkOptions {
   token: string
   pingMs?: number
   silenceMs?: number
+  helloMs?: number
   log?: (line: string) => void
   /** Where the page fetch lines go; `log` when absent. */
   requestLog?: (line: string) => void
@@ -112,6 +115,7 @@ export class TabLink extends EventEmitter {
   private readonly token: string
   private readonly pingMs: number
   private readonly silenceMs: number
+  private readonly helloMs: number
   private readonly log: (line: string) => void
   private readonly requestLog: (line: string) => void
   private readonly fetchPage: (url: string, signal: AbortSignal) => Promise<FetchedPage>
@@ -133,6 +137,7 @@ export class TabLink extends EventEmitter {
     this.token = o.token
     this.pingMs = o.pingMs ?? PING_MS
     this.silenceMs = o.silenceMs ?? SILENCE_MS
+    this.helloMs = o.helloMs ?? HELLO_MS
     this.log = o.log ?? (() => undefined)
     this.requestLog = o.requestLog ?? this.log
     this.fetchPage = o.fetchPage ?? ((url, signal) => pageFetch(url, { signal }))
@@ -145,14 +150,20 @@ export class TabLink extends EventEmitter {
   /** Takes a new WebSocket; it becomes the tab after a valid `hello`. */
   accept(ws: WebSocket) {
     let authed = false
+    // One `hello` per connection: frames after a refused one are not read or logged.
+    let checked = false
+    const hello = setTimeout(() => ws.terminate(), this.helloMs)
     const silence = setTimeout(() => {
       if (authed) this.log('the RebeLLM tab stopped answering; dropped it')
       ws.terminate()
     }, this.silenceMs)
     ws.on('message', (data, isBinary) => {
       silence.refresh()
+      if (checked && !authed) return
       const m = isBinary ? null : parseTabMessage(text(data))
       if (authed) return m ? this.receive(m) : this.log('ignored a frame from the tab that is not protocol v1')
+      checked = true
+      clearTimeout(hello)
       if (m?.t !== 'hello') return ws.close(CLOSE.helloFirst, 'hello first')
       const refuse = (code: 'auth' | 'version' | 'busy', message: string) => {
         send(ws, { t: 'error', code, message })
@@ -167,6 +178,7 @@ export class TabLink extends EventEmitter {
       this.attach(ws, m)
     })
     ws.on('close', () => {
+      clearTimeout(hello)
       clearTimeout(silence)
       if (this.ws === ws) this.detach()
     })

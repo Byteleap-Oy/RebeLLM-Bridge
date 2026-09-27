@@ -93,6 +93,15 @@ describe('server', () => {
     expect(await openai.json()).toMatchObject({ error: { type: 'invalid_request_error' } })
   })
 
+  it('closes a WebSocket that sends a frame bigger than a request body', async () => {
+    const b = await bridge()
+    const ws = new WebSocket(b.ws)
+    await once(ws, 'open')
+    ws.send(JSON.stringify({ t: 'hello', v: 1, token: 'x'.repeat(MAX_BODY) }))
+    const [code] = (await once(ws, 'close')) as [number]
+    expect(code).toBe(1009)
+  })
+
   it('fails to start on a port in use and frees its port on close', async () => {
     const b = await bridge()
     const clash = startServer({ host: '127.0.0.1', port: b.server.port, token: TOKEN, waitMs: 0 })

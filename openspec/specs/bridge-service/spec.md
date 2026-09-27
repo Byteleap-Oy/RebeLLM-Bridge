@@ -9,8 +9,9 @@ TBD - created by archiving change bridge-service. Update Purpose after archive.
 
 `rebellm-bridge` SHALL listen on `127.0.0.1:7343` by default, accept one RebeLLM tab over
 WebSocket with the protocol v1 and a token it generated and printed once, and answer a
-second tab with `busy`. On start it SHALL print the addresses for the tab, OpenAI clients
-and Anthropic clients.
+second tab with `busy`. It SHALL read only the first frame of a connection as its `hello`,
+drop a connection that sends none within 10 s, and close one that sends a frame over 8 MiB.
+On start it SHALL print the addresses for the tab, OpenAI clients and Anthropic clients.
 
 #### Scenario: First start
 
@@ -36,6 +37,21 @@ and Anthropic clients.
 
 - **WHEN** the bridge starts on port 7343
 - **THEN** its output names `ws://127.0.0.1:7343` for the tab, `http://127.0.0.1:7343/v1` for OpenAI clients and `http://127.0.0.1:7343` for Anthropic clients with `rebellm-claude`
+
+#### Scenario: Repeated hello
+
+- **WHEN** a connection sends a `hello` with a wrong token and then more `hello` frames
+- **THEN** the bridge answers `auth` once, logs one refusal and closes the connection
+
+#### Scenario: No hello
+
+- **WHEN** a connection opens and sends nothing for 10 s
+- **THEN** the bridge drops it
+
+#### Scenario: Oversized frame
+
+- **WHEN** a connection sends a frame over 8 MiB
+- **THEN** the bridge closes it with code 1009 without reading the frame
 
 ### Requirement: OpenAI-style endpoint
 
