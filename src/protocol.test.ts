@@ -30,6 +30,11 @@ describe('protocol v1', () => {
     })
   })
 
+  it('reads a contextTokens that is not a positive whole number as unknown', () => {
+    for (const bad of [{ a: 1 }, true, '32768', -5, 1.5, null, 2 ** 60])
+      expect(parse({ ...hello, contextTokens: bad }), String(bad)).toMatchObject({ t: 'hello', contextTokens: 0 })
+  })
+
   it('checks the fields of each frame type', () => {
     const usage = { prompt: 3, completion: 2, tokensPerSec: 10.5 }
     const call = { id: 'a-call-1', function: { name: 'f', arguments: { x: 1 } } }

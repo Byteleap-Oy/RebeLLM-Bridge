@@ -130,7 +130,11 @@ export function parseTabMessage(raw: string): TabMessage | null {
     return null
   }
   if (!isObj(o) || !valid(o)) return null
-  if (o.t === 'hello') return { model: '', contextTokens: 0, app: '', ...o, t: 'hello' } as TabMessage
+  if (o.t === 'hello') {
+    // Anything but a token count means unknown, never a value that reaches /health or Claude Code.
+    const contextTokens = Number.isSafeInteger(o.contextTokens) && (o.contextTokens as number) > 0 ? o.contextTokens : 0
+    return { model: '', app: '', ...o, contextTokens, t: 'hello' } as TabMessage
+  }
   return o as TabMessage
 }
 

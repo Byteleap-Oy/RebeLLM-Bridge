@@ -92,6 +92,8 @@ type Hello = Extract<TabMessage, { t: 'hello' }>
 type Status = Omit<Extract<TabMessage, { t: 'status' }>, 't'>
 
 interface Pending {
+  /** The tab sent a frame for it, so it read the chat. */
+  heard: boolean
   text: string
   calls: ToolCall[]
   onEvent?: (e: ChatEvent) => void
@@ -161,7 +163,7 @@ export class TabLink extends EventEmitter {
       silence.refresh()
       if (checked && !authed) return
       const m = isBinary ? null : parseTabMessage(text(data))
-      if (authed) return m ? this.receive(m) : this.log('ignored a frame from the tab that is not protocol v1')
+      if (authed) return m ? this.receive(m) : this.unreadable(ws, text(data))
       checked = true
       clearTimeout(hello)
       if (m?.t !== 'hello') return ws.close(CLOSE.helloFirst, 'hello first')
@@ -254,6 +256,7 @@ export class TabLink extends EventEmitter {
         signal?.removeEventListener('abort', onAbort)
       }
       this.pending.set(id, {
+        heard: false,
         text: '',
         calls: [],
         ...(onEvent ? { onEvent } : {}),
@@ -330,12 +333,37 @@ export class TabLink extends EventEmitter {
       case 'queued':
       case 'done':
       case 'error': {
-        if (m.id === undefined) return m.t === 'error' && this.log(`the tab reported: ${m.message}`)
+        if (m.id === undefined) return m.t === 'error' && this.unattributed(m.message)
         // Frames of a chat that was aborted or never sent have no one to go to.
         const p = this.pending.get(m.id)
         if (p) route(p, m, m.id)
       }
     }
+  }
+
+  /** An `error` without an id: the tab could not read a frame, most likely a chat it never answered. */
+  private unattributed(message: string) {
+    this.log(`the tab reported: ${message}`)
+    for (const p of [...this.pending.values()]) if (!p.heard) p.fail(new ChatError(message, 'tab'))
+  }
+
+  /** A frame that fails validation still settles the chat or fetch it names, so nothing waits forever. */
+  private unreadable(ws: WebSocket, raw: string) {
+    this.log('ignored a frame from the tab that is not protocol v1')
+    let o: unknown
+    try {
+      o = JSON.parse(raw)
+    } catch {
+      return
+    }
+    const { t, id } = (o && typeof o === 'object' ? o : {}) as { t?: unknown; id?: unknown }
+    if (typeof id !== 'string') return
+    const message = `the tab sent a ${typeof t === 'string' ? t : 'malformed'} frame this bridge cannot read`
+    const p = this.pending.get(id)
+    if (p) {
+      send(ws, { t: 'abort', id })
+      p.fail(new ChatError(message, 'tab'))
+    } else if (t === 'fetch') send(ws, { t: 'error', id, message })
   }
 
   /** Reads a page the tab asked for and answers `fetched` or `error` with its id. */
@@ -368,6 +396,7 @@ export class TabLink extends EventEmitter {
 }
 
 function route(p: Pending, m: TabMessage, id: string) {
+  p.heard = true
   switch (m.t) {
     case 'token':
       p.text += m.text

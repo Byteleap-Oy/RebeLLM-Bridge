@@ -252,6 +252,39 @@ describe('TabLink', () => {
     expect(lines).toContain('ignored a frame from the tab that is not protocol v1')
     expect(tab.connected).toBe(true)
   })
+
+  it('fails and aborts a chat whose frame it cannot read, and answers an unreadable fetch', async () => {
+    const { tab, ready } = await link()
+    const fake = await ready()
+    const answer = tab.chat({ messages: [{ role: 'user', content: 'x' }] })
+    const failed = expect(answer).rejects.toMatchObject({
+      kind: 'tab',
+      message: 'the tab sent a done frame this bridge cannot read',
+    })
+    const { id } = await fake.nextChat()
+    const badDone: Record<string, unknown> = { t: 'done', id, stop: 'eos', usage: { prompt: 5, completion: 0 } }
+    fake.send(badDone)
+    await failed
+    expect(await fake.next((m) => m.t === 'abort')).toEqual({ t: 'abort', id })
+    const badFetch: Record<string, unknown> = { t: 'fetch', id: 'f1', url: 42 }
+    fake.send(badFetch)
+    expect(await fake.next((m) => m.t === 'error')).toMatchObject({ t: 'error', id: 'f1' })
+  })
+
+  it('fails the chats the tab never answered when it reports an error without an id', async () => {
+    const { tab, ready } = await link()
+    const fake = await ready()
+    const heard = tab.chat({ messages: [{ role: 'user', content: 'a' }] })
+    const first = await fake.nextChat()
+    fake.send({ t: 'queued', id: first.id, position: 1 })
+    const unheard = tab.chat({ messages: [{ role: 'user', content: 'b' }] })
+    const failed = expect(unheard).rejects.toMatchObject({ kind: 'tab', message: 'could not read' })
+    await fake.nextChat()
+    fake.send({ t: 'error', message: 'could not read' })
+    await failed
+    fake.answer(first.id, ['fine'])
+    expect((await heard).text).toBe('fine')
+  })
 })
 
 describe('TabLink: page fetch', () => {

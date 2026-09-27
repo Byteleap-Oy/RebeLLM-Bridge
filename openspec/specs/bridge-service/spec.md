@@ -144,3 +144,22 @@ connection, and SHALL keep none of the refused body.
 #### Scenario: Oversized body
 - **WHEN** a client posts a 9 MiB body to `/v1/messages` or `/v1/chat/completions`
 - **THEN** it receives status 413 with the error in that endpoint's shape and nothing is sent to the tab
+
+### Requirement: Tab frames the bridge cannot read
+The bridge SHALL settle every chat and fetch even when the tab's frames are malformed: a
+frame that fails validation but names a pending chat SHALL fail that chat and send `abort`
+for it, one that names a fetch SHALL be answered with `error`, and an `error` without an id
+SHALL fail the pending chats the tab has sent no frame for. A `hello` whose `contextTokens`
+is not a positive whole number SHALL count as having no known context.
+
+#### Scenario: Malformed done
+- **WHEN** the tab answers a chat with `done` whose usage is not valid
+- **THEN** the client's request fails with the tab's error instead of waiting, and the tab gets `abort` for it
+
+#### Scenario: Error without an id
+- **WHEN** a chat is pending that the tab has sent nothing for, and the tab sends `error` without an id
+- **THEN** that chat fails with the tab's message and chats the tab already answered continue
+
+#### Scenario: Odd context size
+- **WHEN** a tab says `hello` with `contextTokens: true`
+- **THEN** `/health` reports no context size and no context check is made

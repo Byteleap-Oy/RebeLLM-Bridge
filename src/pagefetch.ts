@@ -346,12 +346,13 @@ export async function pageFetch(raw: string, o: PageFetchOptions = {}): Promise<
 }
 
 /** A token bucket: true while the tab stays within `perMinute` fetches, on average. */
-export function rateLimit(perMinute = PER_MINUTE, now = Date.now) {
+export function rateLimit(perMinute = PER_MINUTE, now = () => performance.now()) {
   let tokens = perMinute
   let at = now()
   return () => {
     const t = now()
-    tokens = Math.min(perMinute, tokens + ((t - at) * perMinute) / 60_000)
+    // A clock that steps back must not drain the bucket.
+    tokens = Math.min(perMinute, tokens + (Math.max(0, t - at) * perMinute) / 60_000)
     at = t
     if (tokens < 1) return false
     tokens -= 1

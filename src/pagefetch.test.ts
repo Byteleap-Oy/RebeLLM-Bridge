@@ -389,6 +389,15 @@ describe('rateLimit', () => {
     expect(take()).toBe(true)
     expect(take()).toBe(false)
   })
+
+  it('keeps its tokens when the clock steps back', () => {
+    let t = 3_600_000
+    const take = rateLimit(30, () => t)
+    t = 0
+    expect(take()).toBe(true)
+    expect(Array.from({ length: 29 }, take).every(Boolean)).toBe(true)
+    expect(take()).toBe(false)
+  })
 })
 
 describe('fetchLine', () => {
