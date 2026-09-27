@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change bridge-service. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Local service
 
 `rebellm-bridge` SHALL listen on `127.0.0.1:7343` by default, accept one RebeLLM tab over
@@ -91,9 +93,10 @@ refusal, or an error; message content SHALL never be logged; `--quiet` SHALL sil
 The bridge SHALL list `fetch` in its `ok` features and, on a tab's `{ t: 'fetch', id, url }`,
 SHALL fetch the page from this computer and answer `fetched` with status, type, final URL,
 text and whether it was cut, or an `error`; it SHALL accept only `http` and `https`, refuse
-any hop whose address is not public and dial the checked address, follow at most five
-redirects, send no cookies or credentials, pass text types only, stop at 2 MB and 15 s,
-allow 30 fetches a minute, and log each fetch by host only.
+any hop whose address is not public or belongs to one of this computer's own network
+interfaces and dial the checked address, follow at most five redirects, send no cookies or
+credentials, pass text types only, stop at 2 MB and 15 s, allow 30 fetches a minute, and log
+each fetch by host only.
 
 #### Scenario: Public page
 - **WHEN** the tab asks for `https://docs.python.org/3/library/json.html`
@@ -103,3 +106,7 @@ allow 30 fetches a minute, and log each fetch by host only.
 - **WHEN** the tab asks for `http://192.168.1.1/` or a page that redirects there
 - **THEN** the bridge answers an error without connecting to that address
 
+#### Scenario: This computer's public address
+- **WHEN** this computer has the global IPv6 address `2001:db8:1::5` and the tab asks for
+  `http://[2001:db8:1::5]:8080/`, a host resolving to it, or a page that redirects there
+- **THEN** the bridge answers an error without connecting to that address

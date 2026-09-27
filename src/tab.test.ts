@@ -193,8 +193,13 @@ describe('TabLink', () => {
     const fake = await ready()
     const answer = tab.chat({ messages: [{ role: 'user', content: 'x' }] })
     await fake.nextChat()
+    // Handle the rejection before closing; it fires during the close.
+    const failed = expect(answer).rejects.toMatchObject({
+      kind: 'disconnected',
+      message: 'the RebeLLM tab disconnected',
+    })
     await fake.close()
-    await expect(answer).rejects.toMatchObject({ kind: 'disconnected', message: 'the RebeLLM tab disconnected' })
+    await failed
     expect(tab.health().tab).toBe(false)
     expect(lines).toContain('RebeLLM tab disconnected')
     await expect(tab.chat({ messages: [{ role: 'user', content: 'x' }] })).rejects.toMatchObject({ kind: 'no_tab' })

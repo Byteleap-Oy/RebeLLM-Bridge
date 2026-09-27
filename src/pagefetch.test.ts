@@ -6,6 +6,7 @@ import {
   MAX_REDIRECTS,
   PageFetchError,
   USER_AGENT,
+  canonicalAddress,
   checkedDialer,
   fetchLine,
   isPublicAddress,
@@ -14,6 +15,12 @@ import {
   type Dial,
   type Lookup,
 } from './pagefetch.js'
+
+const os = vi.hoisted(() => ({ interfaces: {} as Record<string, { address: string }[]> }))
+vi.mock('node:os', async (actual) => ({
+  ...(await actual<typeof import('node:os')>()),
+  networkInterfaces: () => os.interfaces,
+}))
 
 const PUBLIC = '93.184.215.14'
 const dns =
@@ -86,6 +93,21 @@ describe('isPublicAddress', () => {
   })
 })
 
+describe('canonicalAddress', () => {
+  it('spells one address one way, mapped IPv4 as IPv4, without brackets or zone', () => {
+    for (const [a, b] of [
+      ['2001:DB8:1::5', '[2001:db8:1:0:0:0:0:5]'],
+      ['fe80::1%eth0', 'fe80::1'],
+      ['203.0.113.5', '::ffff:203.0.113.5'],
+      ['203.0.113.5', '::ffff:cb00:7105'],
+      ['203.0.113.5', '::ffff:0:203.0.113.5'],
+    ] as const)
+      expect(canonicalAddress(a), `${a} = ${b}`).toBe(canonicalAddress(b))
+    expect(canonicalAddress('2001:db8:1::5')).not.toBe(canonicalAddress('2001:db8:1::6'))
+    expect(canonicalAddress('not-an-address')).toBeNull()
+  })
+})
+
 describe('pageFetch', () => {
   it('reads a public page from the checked address, without cookies or credentials', async () => {
     const { dial, calls } = dialer({
@@ -142,6 +164,39 @@ describe('pageFetch', () => {
     const lookup = dns({ 'a.example': [PUBLIC], 'intranet.example': ['10.0.0.1'] })
     await refused(pageFetch('https://a.example/', { lookup, dial }), /^intranet\.example is not a public address$/)
     expect(calls.map((c) => c.url)).toEqual(['https://a.example/', 'https://a.example/b'])
+  })
+
+  it("refuses this computer's own public addresses, in any spelling and on any hop, without connecting", async () => {
+    const MINE_V6 = '2606:4700:1::5'
+    const MINE_V4 = '8.8.4.4'
+    const ownAddresses = () => ['127.0.0.1', 'fe80::1', MINE_V6.toUpperCase(), MINE_V4]
+    const lookup = dns({
+      'self.example': [MINE_V6],
+      'mixed.example': [PUBLIC, MINE_V4],
+      'a.example': [PUBLIC],
+    })
+    const { dial, calls } = dialer({ 'https://a.example/': () => redirect(`http://[${MINE_V6}]:8080/admin`) })
+    const o = { lookup, dial, ownAddresses }
+    await refused(pageFetch(`http://[${MINE_V6}]:8080/`, o), /is not a public address$/)
+    await refused(pageFetch('http://[2606:4700:1:0::5]/', o), /is not a public address$/)
+    await refused(pageFetch(`http://${MINE_V4}/`, o), /^8\.8\.4\.4 is not a public address$/)
+    await refused(pageFetch(`http://[::ffff:${MINE_V4}]/`, o), /is not a public address$/)
+    await refused(pageFetch('http://self.example/', o), /^self\.example is not a public address$/)
+    await refused(pageFetch('http://mixed.example/', o), /^mixed\.example is not a public address$/)
+    await refused(pageFetch('https://a.example/', o), /is not a public address$/)
+    expect(calls.map((c) => c.url)).toEqual(['https://a.example/'])
+  })
+
+  it('reads the network interfaces on every fetch by default', async () => {
+    const { dial } = dialer({ 'http://self.example/': () => page('hi', 'text/plain') })
+    const o = { lookup: dns({ 'self.example': ['2606:4700:1::7'] }), dial }
+    expect(await pageFetch('http://self.example/', o)).toMatchObject({ text: 'hi' })
+    os.interfaces = { eth0: [{ address: '2606:4700:1::7' }] }
+    try {
+      await refused(pageFetch('http://self.example/', o), /not a public address/)
+    } finally {
+      os.interfaces = {}
+    }
   })
 
   it(`follows up to ${MAX_REDIRECTS} redirects and names the final URL`, async () => {

@@ -1,6 +1,7 @@
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { createRequire } from 'node:module'
 import { isIP, type LookupFunction } from 'node:net'
+import { networkInterfaces } from 'node:os'
 import { Agent, fetch as undiciFetch } from 'undici'
 import type { FetchedPage } from './protocol.js'
 
@@ -114,6 +115,22 @@ export function isPublicAddress(address: string): boolean {
   return !((at(0) & 0xfe00) === 0xfc00 || (at(0) & 0xffc0) === 0xfe80 || (at(0) & 0xffc0) === 0xfec0 || at(0) >= 0xff00)
 }
 
+/** One spelling per address: dotted IPv4 (also for mapped forms) or eight IPv6 groups, no zone. */
+export function canonicalAddress(address: string): string | null {
+  const a = address.replace(/^\[|\]$/g, '')
+  if (isIP(a) === 4) return a
+  const g = v6(a)
+  if (!g) return null
+  const zero = (from: number, to: number) => g.slice(from, to).every((x) => x === 0)
+  const mapped = zero(0, 6) || (zero(0, 5) && g[5] === 0xffff) || (zero(0, 4) && g[4] === 0xffff && g[5] === 0)
+  if (mapped) return [g[6]! >> 8, g[6]! & 0xff, g[7]! >> 8, g[7]! & 0xff].join('.')
+  return g.map((x) => x.toString(16)).join(':')
+}
+
+// Read per fetch: IPv6 privacy addresses rotate.
+const interfaceAddresses = () =>
+  Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((i) => i.address))
+
 export interface Resolved {
   address: string
   family: number
@@ -172,13 +189,15 @@ function target(raw: string, base?: URL): URL {
   return u
 }
 
-async function resolve(url: URL, lookup: Lookup): Promise<Resolved> {
+async function resolve(url: URL, lookup: Lookup, mine: Set<string>): Promise<Resolved> {
   const host = url.hostname.replace(/^\[|\]$/g, '')
   const family = isIP(host)
   const addrs = family ? [{ address: host, family }] : await lookup(host).catch(() => [])
   if (!addrs.length) throw new PageFetchError(`${host} does not resolve`)
   // One private answer is enough: the connection could pick it.
-  if (addrs.some((a) => !isPublicAddress(a.address))) throw new PageFetchError(`${host} is not a public address`)
+  // This computer's own public addresses reach its local services too.
+  const refused = (a: string) => !isPublicAddress(a) || mine.has(canonicalAddress(a)!)
+  if (addrs.some((a) => refused(a.address))) throw new PageFetchError(`${host} is not a public address`)
   return addrs[0]!
 }
 
@@ -218,6 +237,8 @@ export interface PageFetchOptions {
   lookup?: Lookup
   /** Tests hand in their own; one checkedDialer per fetch by default. */
   dial?: Dial
+  /** This computer's addresses; the network interfaces by default. */
+  ownAddresses?: () => string[]
   maxBytes?: number
   timeoutMs?: number
   signal?: AbortSignal
@@ -233,9 +254,14 @@ export async function pageFetch(raw: string, o: PageFetchOptions = {}): Promise<
   const own = o.dial ? null : checkedDialer()
   const dial = o.dial ?? own!.dial
   try {
+    const mine = new Set(
+      (o.ownAddresses ?? interfaceAddresses)()
+        .map(canonicalAddress)
+        .filter((a) => a !== null),
+    )
     let url = target(raw)
     for (let hop = 0; ; hop++) {
-      const { address, family } = await resolve(url, lookup)
+      const { address, family } = await resolve(url, lookup, mine)
       signal.throwIfAborted()
       const up = await dial(url, { address, family, headers: { ...HEADERS }, signal })
       const location = up.headers.get('location')
