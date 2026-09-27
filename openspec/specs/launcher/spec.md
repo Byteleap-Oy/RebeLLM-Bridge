@@ -18,7 +18,7 @@ code, and give the child an environment that sends every model request to the br
 `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`,
 `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` blanked, so nothing from the shell
 outranks the bridge. The same variables SHALL reach `claude` as `--settings <file>` from a
-file the launcher writes at `~/.rebellm-bridge/claude-settings.json`, placed before the
+file the launcher writes at `~/.rebellm-bridge/claude-settings-<port>.json`, placed before the
 user's arguments, so a project's or local `.claude/settings.json` does not outrank them
 either.
 
@@ -74,7 +74,10 @@ suggestions (`promptSuggestionEnabled`) and thinking summaries (`showThinkingSum
 
 The launcher SHALL reuse a bridge already answering `/health` on the port, otherwise
 start one in-process that logs to `~/.rebellm-bridge/bridge.log` and stops when `claude`
-exits. A port held by anything else SHALL be an error.
+exits. A port held by anything else SHALL be an error. While `claude` runs on a reused
+bridge, the launcher SHALL start its own bridge on the same port when that one stops. It
+SHALL pass SIGTERM and SIGHUP on to `claude`, and give `claude` a `--settings` file of its
+own port.
 
 #### Scenario: Bridge already running
 
@@ -85,6 +88,16 @@ exits. A port held by anything else SHALL be an error.
 
 - **WHEN** nothing listens on the port
 - **THEN** the launcher starts the bridge, and the port is free again after `claude` exits
+
+#### Scenario: Owner exits first
+
+- **WHEN** two launchers share the bridge the first one started and the first `claude` exits
+- **THEN** the second launcher starts a bridge on the same port and its `claude` keeps working once the tab reconnects
+
+#### Scenario: Launcher stopped
+
+- **WHEN** the launcher receives SIGTERM while `claude` runs
+- **THEN** `claude` receives SIGTERM, and the launcher exits after it
 
 ### Requirement: Wait for the tab
 

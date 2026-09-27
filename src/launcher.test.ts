@@ -41,13 +41,15 @@ function sink() {
 
 // What the stub claude saw: its arguments, the environment the launcher gave it, and the bridge's health.
 const STUB = `
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 const pick = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
   'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'API_TIMEOUT_MS', 'ANTHROPIC_CUSTOM_HEADERS',
   'CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS', 'CLAUDE_STREAM_IDLE_TIMEOUT_MS',
   'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
   'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
 const env = Object.fromEntries(pick.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]))
+// With STUB_WAIT, claude keeps running until that file exists.
+while (process.env.STUB_WAIT && !existsSync(process.env.STUB_WAIT)) await new Promise((r) => setTimeout(r, 20))
 const health = await fetch(process.env.ANTHROPIC_BASE_URL + '/health').then((r) => r.json(), () => null)
 writeFileSync(process.env.STUB_OUT, JSON.stringify({ args: process.argv.slice(2), env, health }))
 process.exit(Number(process.env.STUB_EXIT ?? 0))
@@ -78,6 +80,11 @@ function env(pathDir: string, extra: Record<string, string> = {}): NodeJS.Proces
   for (const [k, v] of Object.entries(process.env))
     if (!/^(path|anthropic_.*|claude_config_dir|claude_code_use_.*)$/i.test(k)) e[k] = v
   return { ...e, PATH: pathDir, ...extra }
+}
+
+async function until(ok: () => boolean) {
+  for (let i = 0; i < 500 && !ok(); i++) await new Promise((r) => setTimeout(r, 10))
+  if (!ok()) throw new Error('timed out')
 }
 
 describe('parseLauncher', () => {
@@ -167,7 +174,7 @@ describe('environment and settings', () => {
 
   it('writes the --settings file and reads what managed settings pin', () => {
     const home = temp()
-    const file = launchSettingsFile(home)
+    const file = launchSettingsFile(home, 7343)
     writeLaunchSettings(file, { A: '1' })
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...QUIET_SETTINGS, env: { A: '1' } })
     expect(QUIET_SETTINGS).toEqual({
@@ -222,7 +229,13 @@ describe('launch', () => {
     })
     expect(code).toBe(2)
     const seen = JSON.parse(readFileSync(stub.out, 'utf8')) as Seen
-    expect(seen.args).toEqual(['--settings', launchSettingsFile(home), '-p', 'What is 2 + 3?', 'say "hi" & exit'])
+    expect(seen.args).toEqual([
+      '--settings',
+      launchSettingsFile(home, b.server.port),
+      '-p',
+      'What is 2 + 3?',
+      'say "hi" & exit',
+    ])
     expect(seen.env).toEqual({ ...bridgeEnv(b.base, 32768), CLAUDE_CONFIG_DIR: configDir(home) })
     expect(seen.health).toMatchObject({ tab: true, model: 'qwen' })
     expect(err.text()).toContain(`using the bridge already running on ${b.base}`)
@@ -230,7 +243,7 @@ describe('launch', () => {
     expect(err.text()).toContain(`settings in ${managed} set ANTHROPIC_BASE_URL, apiKeyHelper; they rank above`)
     expect(existsSync(logFile(home))).toBe(false)
     expect(existsSync(join(configDir(home), 'settings.json'))).toBe(false)
-    expect(JSON.parse(readFileSync(launchSettingsFile(home), 'utf8'))).toEqual({
+    expect(JSON.parse(readFileSync(launchSettingsFile(home, b.server.port), 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
       env: bridgeEnv(b.base, 32768),
     })
@@ -266,7 +279,7 @@ describe('launch', () => {
     expect(await running).toBe(0)
     const seen = JSON.parse(readFileSync(stub.out, 'utf8')) as Seen
     expect(seen.health).toMatchObject({ tab: true })
-    expect(seen.args).toEqual(['--settings', launchSettingsFile(home)])
+    expect(seen.args).toEqual(['--settings', launchSettingsFile(home, Number(new URL(base!).port))])
     expect(seen.env.CLAUDE_CONFIG_DIR).toBe('mine')
     expect(existsSync(configDir(home))).toBe(false)
     expect(err.text()).not.toContain('rank above')
@@ -275,6 +288,56 @@ describe('launch', () => {
     expect(log).toMatch(/listening on 127\.0\.0\.1:\d+ for rebellm-claude/)
     expect(log).toContain('RebeLLM tab connected')
     expect(log).not.toContain(token)
+  })
+
+  it('takes the port over when the bridge it borrowed stops while claude runs', async () => {
+    const b = await bridge()
+    await b.tab('qwen')
+    const port = b.server.port
+    const stub = stubClaude()
+    const home = temp()
+    const release = join(stub.dir, 'release')
+    const running = launch(['--port', String(port)], {
+      stderr: sink().stream,
+      env: env(stub.dir, { STUB_OUT: stub.out, STUB_WAIT: release }),
+      home,
+      pollMs: 20,
+      managedFile: join(home, 'none.json'),
+    })
+    await until(() => existsSync(launchSettingsFile(home, port)))
+    await b.server.close()
+    await until(() => existsSync(logFile(home)) && readFileSync(logFile(home), 'utf8').includes('took over the port'))
+    const token = readFileSync(tokenFile(home), 'utf8').trim()
+    const tab = await FakeTab.ready(`ws://127.0.0.1:${port}`, token, 'qwen')
+    onTestFinished(() => void tab.ws.terminate())
+    writeFileSync(release, '')
+    expect(await running).toBe(0)
+    const seen = JSON.parse(readFileSync(stub.out, 'utf8')) as Seen
+    expect(seen.env.ANTHROPIC_BASE_URL).toBe(`http://127.0.0.1:${port}`)
+    expect(seen.health).toMatchObject({ tab: true, model: 'qwen' })
+    // The bridge it took over stops with it.
+    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow()
+  })
+
+  it.skipIf(win)('passes SIGTERM and SIGHUP on to claude', async () => {
+    const b = await bridge()
+    await b.tab('qwen')
+    const stub = stubClaude()
+    const home = temp()
+    const running = launch(['--port', String(b.server.port)], {
+      stderr: sink().stream,
+      env: env(stub.dir, { STUB_OUT: stub.out, STUB_WAIT: join(stub.dir, 'never') }),
+      home,
+      pollMs: 20,
+      managedFile: join(home, 'none.json'),
+    })
+    const listeners = process.listenerCount('SIGTERM')
+    await until(() => existsSync(launchSettingsFile(home, b.server.port)))
+    // Give the child a moment to start before the signal arrives.
+    await new Promise((r) => setTimeout(r, 200))
+    process.emit('SIGTERM', 'SIGTERM')
+    expect(await running).toBe(143)
+    expect(process.listenerCount('SIGTERM')).toBe(listeners)
   })
 
   it('says how to install Claude Code when claude is missing, before starting anything', async () => {

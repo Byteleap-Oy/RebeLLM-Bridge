@@ -14,7 +14,7 @@ import { delimiter, dirname, extname, join } from 'node:path'
 import type { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import spawn from 'cross-spawn'
-import { TOKEN_ENV, VERSION, bridgeHealth, keepToken, resolveToken, tokenFile } from './cli.js'
+import { TOKEN_ENV, VERSION, bridgeHealth, keepToken, resolveToken, tokenFile, type TokenChoice } from './cli.js'
 import { DEFAULT_PORT, startServer, type BridgeServer } from './server.js'
 import type { Health } from './tab.js'
 
@@ -33,6 +33,9 @@ export const MISSING =
 
 /** The name Claude Code shows; the bridge answers every model name with the tab's model. */
 export const MODEL = 'rebellm'
+
+/** Passed on to claude; SIGINT reaches it from the terminal already. */
+const FORWARDED = ['SIGTERM', 'SIGHUP'] as const
 
 /** How long a request waits for the tab's model, as the bridge's `--wait` default. */
 const WAIT_MS = 120_000
@@ -154,8 +157,9 @@ export function childEnv(
 
 export const configDir = (home: string) => join(home, '.rebellm-bridge', 'claude')
 export const logFile = (home: string) => join(home, '.rebellm-bridge', 'bridge.log')
-/** Given to claude as `--settings`, which ranks above project, local and user settings. */
-export const launchSettingsFile = (home: string) => join(home, '.rebellm-bridge', 'claude-settings.json')
+/** Given to claude as `--settings`, which ranks above project, local and user settings; one per port, as the bridge URL differs. */
+export const launchSettingsFile = (home: string, port: number) =>
+  join(home, '.rebellm-bridge', `claude-settings-${port}.json`)
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -236,40 +240,48 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
   const quit = new AbortController()
   const onSigint = () => quit.abort()
   process.on('SIGINT', onSigint)
-  let server: BridgeServer | null = null
-  let log: ReturnType<typeof createWriteStream> | null = null
+  // Set inside closures, so declared without a narrowing initial type.
+  let server = null as BridgeServer | null
+  let log = null as ReturnType<typeof createWriteStream> | null
+  const file = logFile(home)
+  const write = (line: string) => {
+    if (!log) {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+      log = createWriteStream(file, { flags: 'a', mode: 0o600 })
+    }
+    log.write(`${new Date().toISOString()} ${line}\n`)
+  }
+  const pollMs = io.pollMs ?? 1000
+  let base = `http://127.0.0.1:${o.port}`
+  /** Starts our own bridge on the port; null when another bridge answers there. */
+  const startBridge = async (): Promise<TokenChoice | null> => {
+    const tok = resolveToken({ ...(io.env[TOKEN_ENV] ? { env: io.env[TOKEN_ENV] } : {}), home })
+    try {
+      server = await startServer({ host: '127.0.0.1', port: o.port, token: tok.token, waitMs: WAIT_MS, log: write })
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e
+      // Another launcher may have started one meanwhile.
+      if (await bridgeHealth(base)) return null
+      throw new Error(`port ${o.port} on 127.0.0.1 is in use by something that is not a rebellm-bridge`, { cause: e })
+    }
+    keepToken(tok)
+    base = `http://127.0.0.1:${server.port}`
+    write(`${VERSION} listening on 127.0.0.1:${server.port} for rebellm-claude`)
+    return tok
+  }
+
   try {
-    let base = `http://127.0.0.1:${o.port}`
     let token = `the token in ${tokenFile(home)}`
     let health: Health | null = await bridgeHealth(base)
     if (health) say(`using the bridge already running on ${base}`)
     else {
-      const tok = resolveToken({ ...(io.env[TOKEN_ENV] ? { env: io.env[TOKEN_ENV] } : {}), home })
-      const file = logFile(home)
-      mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-      const stream = createWriteStream(file, { flags: 'a', mode: 0o600 })
-      log = stream
-      const write = (line: string) => void stream.write(`${new Date().toISOString()} ${line}\n`)
-      try {
-        server = await startServer({ host: '127.0.0.1', port: o.port, token: tok.token, waitMs: WAIT_MS, log: write })
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e
-        // Another launcher may have started one meanwhile.
-        health = await bridgeHealth(base)
-        if (!health)
-          throw new Error(`port ${o.port} on 127.0.0.1 is in use by something that is not a rebellm-bridge`, {
-            cause: e,
-          })
-      }
-      if (server) {
-        base = `http://127.0.0.1:${server.port}`
-        keepToken(tok)
-        write(`${VERSION} listening on 127.0.0.1:${server.port} for rebellm-claude`)
+      const tok = await startBridge()
+      if (tok) {
         say(`started the bridge on ${base} (log: ${file})`)
         if (tok.created) token = `this new token (stored in ${tok.file}):\n\n  ${tok.token}\n`
         else if (tok.source === 'env') token = `the token in ${TOKEN_ENV}`
-        health = await bridgeHealth(base)
       }
+      health = await bridgeHealth(base)
     }
 
     if (!health?.tab) {
@@ -279,7 +291,7 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
       )
       while (!health?.tab) {
         if (quit.signal.aborted) return 130
-        await sleep(io.pollMs ?? 1000, quit.signal)
+        await sleep(pollMs, quit.signal)
         health = await bridgeHealth(base)
       }
     }
@@ -288,7 +300,7 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
 
     const dir = o.sharedConfig ? null : configDir(home)
     const ours = bridgeEnv(base, health.contextTokens)
-    const settings = launchSettingsFile(home)
+    const settings = launchSettingsFile(home, Number(new URL(base).port))
     writeLaunchSettings(settings, ours)
     const managed = io.managedFile ?? managedSettingsFile(platform, io.env)
     const overrides = managedOverrides(managed)
@@ -301,7 +313,10 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
     const env = childEnv(io.env, { ...ours, ...(dir ? { CLAUDE_CONFIG_DIR: dir } : {}) }, platform)
     // Ours first: a --settings the user passes comes later and wins, as asked.
     const child = spawn(claude, ['--settings', settings, ...o.args], { stdio: 'inherit', env })
-    return await new Promise<number>((resolve) => {
+    // A supervisor or IDE stopping the launcher stops claude too, instead of orphaning it.
+    const forward = (signal: NodeJS.Signals) => void child.kill(signal)
+    for (const sig of FORWARDED) process.on(sig, forward)
+    const exited = new Promise<number>((resolve) => {
       child.on('error', (e) => {
         say(`could not start ${claude}: ${e.message}`)
         resolve(1)
@@ -310,6 +325,26 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
         resolve(code ?? 128 + ((signal && os.signals[signal as keyof typeof os.signals]) || 0)),
       )
     })
+    // A borrowed bridge stops with the launcher that owns it; then this one takes the port over.
+    const done = new AbortController()
+    const standby = (async () => {
+      while (!server && !done.signal.aborted) {
+        await sleep(pollMs, done.signal)
+        if (done.signal.aborted || (await bridgeHealth(base))) continue
+        try {
+          if (await startBridge()) write('took over the port after the bridge there stopped')
+        } catch (e) {
+          write(`could not take over the port: ${(e as Error).message}`)
+        }
+      }
+    })()
+    try {
+      return await exited
+    } finally {
+      done.abort()
+      await standby
+      for (const sig of FORWARDED) process.off(sig, forward)
+    }
   } catch (e) {
     say((e as Error).message)
     return 1
