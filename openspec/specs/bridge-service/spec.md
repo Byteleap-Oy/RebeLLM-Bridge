@@ -163,3 +163,21 @@ is not a positive whole number SHALL count as having no known context.
 #### Scenario: Odd context size
 - **WHEN** a tab says `hello` with `contextTokens: true`
 - **THEN** `/health` reports no context size and no context check is made
+
+### Requirement: Command-line values
+`rebellm-bridge` SHALL refuse a blank `--port` or `--wait`, treat a `--wait` longer than a
+timer can hold as the longest wait possible, store and print a newly created token only once
+its own bridge is listening, and warn when `--token` is used that other users of the
+computer can read it in the process list.
+
+#### Scenario: Blank value
+- **WHEN** the bridge is started with `--port=`
+- **THEN** it exits with the error `--port needs a value`
+
+#### Scenario: Port taken on a first start
+- **WHEN** no token is stored and the port is in use
+- **THEN** the bridge fails without storing or printing a token
+
+#### Scenario: Token on the command line
+- **WHEN** the bridge is started with `--token`
+- **THEN** it logs a warning that the token is visible in the process list

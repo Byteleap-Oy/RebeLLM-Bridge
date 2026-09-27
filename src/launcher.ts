@@ -14,7 +14,7 @@ import { delimiter, dirname, extname, join } from 'node:path'
 import type { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import spawn from 'cross-spawn'
-import { TOKEN_ENV, VERSION, bridgeHealth, resolveToken, tokenFile } from './cli.js'
+import { TOKEN_ENV, VERSION, bridgeHealth, keepToken, resolveToken, tokenFile } from './cli.js'
 import { DEFAULT_PORT, startServer, type BridgeServer } from './server.js'
 import type { Health } from './tab.js'
 
@@ -60,7 +60,7 @@ export function parseLauncher(argv: string[]): LauncherOptions | { error: string
       o.sharedConfig = true
     } else if (flag === '--claude' || flag === '--port') {
       const value = eq > 0 ? arg.slice(eq + 1) : argv[++i]
-      if (!value) return { error: `${flag} needs a value` }
+      if (!value?.trim()) return { error: `${flag} needs a value` }
       if (flag === '--claude') o.claude = value
       else {
         const port = Number(value)
@@ -263,6 +263,7 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
       }
       if (server) {
         base = `http://127.0.0.1:${server.port}`
+        keepToken(tok)
         write(`${VERSION} listening on 127.0.0.1:${server.port} for rebellm-claude`)
         say(`started the bridge on ${base} (log: ${file})`)
         if (tok.created) token = `this new token (stored in ${tok.file}):\n\n  ${tok.token}\n`

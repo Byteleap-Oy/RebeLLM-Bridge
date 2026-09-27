@@ -96,6 +96,7 @@ describe('parseLauncher', () => {
   it('rejects flags without a usable value', () => {
     expect(parseLauncher(['--port'])).toEqual({ error: '--port needs a value' })
     expect(parseLauncher(['--claude='])).toEqual({ error: '--claude needs a value' })
+    expect(parseLauncher(['--port', ' '])).toEqual({ error: '--port needs a value' })
     expect(parseLauncher(['--port', 'x'])).toEqual({ error: '--port x is not a port number' })
   })
 })

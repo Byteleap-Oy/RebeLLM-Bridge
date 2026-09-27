@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change anthropic-messages. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Launch Claude Code on the tab model
 
 `rebellm-claude` SHALL run `claude` with inherited stdio, pass through all arguments it
@@ -136,3 +138,10 @@ the launcher. A missing or unreadable file SHALL be silent.
 - **WHEN** the file does not exist
 - **THEN** the launcher prints nothing about it
 
+### Requirement: Launcher option values
+`rebellm-claude` SHALL refuse a blank `--port` or `--claude` value, and SHALL store a newly
+created token only once the bridge it started is listening.
+
+#### Scenario: Blank port
+- **WHEN** the launcher is started with `--port ' '`
+- **THEN** it exits with the error `--port needs a value`

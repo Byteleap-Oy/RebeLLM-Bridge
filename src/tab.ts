@@ -232,7 +232,8 @@ export class TabLink extends EventEmitter {
         resolve(this.unavailable())
       }
       const check = () => !this.unavailable() && done()
-      const timer = setTimeout(done, ms)
+      // Longer than 2^31-1 ms, Node fires a timer at once.
+      const timer = setTimeout(done, Math.min(ms, 2 ** 31 - 1))
       this.on('change', check)
       signal?.addEventListener('abort', done, { once: true })
     })

@@ -6,7 +6,19 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { USAGE, VERSION, hostWarning, main, parseCli, resolveToken, run, tokenFile, type Io } from './cli.js'
+import {
+  TOKEN_FLAG_WARNING,
+  USAGE,
+  VERSION,
+  hostWarning,
+  keepToken,
+  main,
+  parseCli,
+  resolveToken,
+  run,
+  tokenFile,
+  type Io,
+} from './cli.js'
 import { FakeTab } from './test/fake-tab.js'
 import { bridge } from './test/harness.js'
 
@@ -63,6 +75,9 @@ describe('parseCli', () => {
     expect(parseCli(['--port', '70000'])).toHaveProperty('error')
     expect(parseCli(['--wait=-1'])).toEqual({ error: '--wait -1 is not a number of seconds' })
     expect(parseCli(['--token', ' '])).toEqual({ error: '--token needs a value' })
+    expect(parseCli(['--port='])).toEqual({ error: '--port needs a value' })
+    expect(parseCli(['--port', ' '])).toEqual({ error: '--port needs a value' })
+    expect(parseCli(['--wait='])).toEqual({ error: '--wait needs a value' })
     expect(parseCli(['--nope'])).toHaveProperty('error')
     expect(parseCli(['stray'])).toHaveProperty('error')
   })
@@ -75,11 +90,13 @@ describe('parseCli', () => {
 })
 
 describe('resolveToken', () => {
-  it('creates the token file once, owner-only, and reuses it', () => {
+  it('creates a token, stores it owner-only only when kept, and reuses it', () => {
     const h = home()
     const first = resolveToken({ home: h })
     expect(first).toMatchObject({ source: 'file', created: true, file: tokenFile(h) })
     expect(first.token).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(() => statSync(tokenFile(h))).toThrow()
+    keepToken(first)
     expect(readFileSync(tokenFile(h), 'utf8').trim()).toBe(first.token)
     // Windows keeps no Unix mode bits.
     if (process.platform !== 'win32') expect(statSync(tokenFile(h)).mode & 0o777).toBe(0o600)
@@ -180,6 +197,17 @@ describe('run', () => {
     )
     expect(await main(['--port', String(b.server.port)], t.io)).toBe(1)
     expect(t.err.text()).toContain('is in use')
+    // No token is created or printed for a bridge that never ran.
+    expect(() => statSync(tokenFile(t.io.home))).toThrow()
+    expect(t.out.text()).not.toContain('New bridge token')
+  })
+
+  it('warns that --token shows in the process list', async () => {
+    const t = io()
+    const running = await run({ ...defaults, port: 0, token: 'from-flag' }, t.io)
+    onTestFinished(() => running.close())
+    expect(t.out.text()).toContain(TOKEN_FLAG_WARNING)
+    expect(TOKEN_FLAG_WARNING).toContain('process list')
   })
 
   it('with --mcp, uses the bridge already on the port and keeps stdout for MCP', async () => {
@@ -191,6 +219,8 @@ describe('run', () => {
     expect(await running.backend!.health()).toMatchObject({ tab: true, model: 'qwen' })
     expect(t.err.text()).toContain(`using the bridge already running on http://127.0.0.1:${b.server.port}`)
     expect(t.out.text()).toBe('')
+    expect(t.err.text()).not.toContain('New bridge token')
+    expect(() => statSync(tokenFile(t.io.home))).toThrow()
     t.stdin.end()
     await running.done
   })

@@ -86,14 +86,14 @@ Tools: `chat` (messages, optional `max_tokens`, `temperature`; streams progress)
 
 ## Options
 
-| Option          | Default                      | Meaning                                            |
-| --------------- | ---------------------------- | -------------------------------------------------- |
-| `--port <n>`    | `7343`                       | one port for the tab (WebSocket) and HTTP          |
-| `--host <addr>` | `127.0.0.1`                  | anything else exposes your model; prints a warning |
-| `--token <t>`   | `REBELLM_BRIDGE_TOKEN`, file | the token the tab must present                     |
-| `--wait <s>`    | `120`                        | how long a request waits for a ready tab           |
-| `--mcp`         | off                          | also serve MCP over stdio                          |
-| `--quiet`       | off                          | no log line per request (never its content)        |
+| Option          | Default                      | Meaning                                                              |
+| --------------- | ---------------------------- | -------------------------------------------------------------------- |
+| `--port <n>`    | `7343`                       | one port for the tab (WebSocket) and HTTP                            |
+| `--host <addr>` | `127.0.0.1`                  | anything else exposes your model; prints a warning                   |
+| `--token <t>`   | `REBELLM_BRIDGE_TOKEN`, file | the token the tab must present; other local users can see it in `ps` |
+| `--wait <s>`    | `120`                        | how long a request waits for a ready tab                             |
+| `--mcp`         | off                          | also serve MCP over stdio                                            |
+| `--quiet`       | off                          | no log line per request (never its content)                          |
 
 ## Test it locally
 

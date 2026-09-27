@@ -221,6 +221,18 @@ describe('TabLink', () => {
     await expect(tab.chat({ messages: [{ role: 'user', content: 'x' }] })).rejects.toMatchObject({ kind: 'no_tab' })
   })
 
+  it('waits past a limit too long for a timer instead of returning at once', async () => {
+    const { tab } = await link()
+    const ctl = new AbortController()
+    const waiting = tab.waitReady(3_000_000_000, ctl.signal)
+    let settled = false
+    void waiting.then(() => (settled = true))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(settled).toBe(false)
+    ctl.abort()
+    expect(await waiting).toMatchObject({ code: 'no_tab' })
+  })
+
   it('waits for a ready model, up to a limit', async () => {
     const { tab, ready } = await link()
     expect(await tab.waitReady(50)).toEqual({ code: 'no_tab', message: 'no RebeLLM tab connected' })
