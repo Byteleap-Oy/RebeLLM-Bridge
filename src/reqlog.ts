@@ -2,9 +2,21 @@ import { ChatError } from './tab.js'
 
 export type LogLine = (line: string) => void
 
+/** What of a request the tab did not get; the log names it, never the content. */
+export interface Ignored {
+  /** Content block types replaced by a placeholder, with counts. */
+  blocks: Record<string, number>
+  /** A forced tool choice: `any`, or `tool <name>`. */
+  toolChoice?: string
+  /** The types of the server tools dropped. */
+  serverTools: string[]
+}
+
 /** The lifecycle of one chat request as log lines; message content never goes in. */
 export interface RequestLog {
   arrived(tokens: number, tools: number): void
+  /** Writes nothing when the tab got everything. */
+  ignored(i: Ignored): void
   queued(position: number): void
   /** Only the first call writes a line. */
   firstToken(): void
@@ -35,6 +47,14 @@ export function requestLog(log: LogLine | undefined, route: string, id: string, 
   let first = false
   return {
     arrived: (tokens, tools) => line(`arrived, ${count(tokens, 'prompt token')}, ${count(tools, 'tool')}`),
+    ignored: (i) => {
+      const parts = [
+        ...Object.entries(i.blocks).map(([type, n]) => count(n, `${type} block`)),
+        ...(i.toolChoice ? [`tool_choice ${i.toolChoice}`] : []),
+        ...i.serverTools.map((t) => `server tool ${t}`),
+      ]
+      if (parts.length) line(`ignored ${parts.join(', ')}`)
+    },
     queued: (position) => line(`queued at ${position} ${since()}`),
     firstToken: () => {
       if (first) return

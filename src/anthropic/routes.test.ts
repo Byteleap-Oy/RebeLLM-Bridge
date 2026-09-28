@@ -9,7 +9,7 @@ import { SearchError } from '../websearch.js'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = any
 
-const user = (content: string) => ({ role: 'user', content })
+const user = (content: string | unknown[]) => ({ role: 'user', content })
 
 const post = (base: string, body: unknown, path = '/v1/messages') =>
   fetch(`${base}${path}`, {
@@ -567,6 +567,43 @@ describe('request log', () => {
       `chat ${id} /v1/messages: done end_turn, 2 tokens, +Ns`,
     ])
     expect(b.lines.join('\n')).not.toMatch(/Capital|Hel|sinki/)
+  })
+
+  it('logs what the tab did not get, never its content', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    tab.onChat = (c) => tab.answer(c.id, ['ok'])
+    const r = await post(b.base, {
+      max_tokens: 9,
+      tool_choice: { type: 'tool', name: 'Read' },
+      tools: [
+        { name: 'Read', input_schema: { type: 'object' } },
+        { type: 'web_fetch_20250910', name: 'web_fetch' },
+      ],
+      messages: [
+        user([
+          { type: 'text', text: 'Secret text' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'c2VjcmV0' } },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'c2VjcmV0' } },
+          { type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'secret doc' } },
+        ]),
+      ],
+    })
+    expect(r.status).toBe(200)
+    const lines = b.requests()
+    expect(lines[1]).toBe(
+      `chat ${idOf(lines)} /v1/messages: ignored 2 image blocks, 1 document block, tool_choice tool Read, ` +
+        'server tool web_fetch_20250910',
+    )
+    expect(b.lines.join('\n')).not.toMatch(/Secret|c2VjcmV0|secret doc/)
+    // Nothing ignored, no line.
+    await post(b.base, { max_tokens: 9, messages: [user('hi')] })
+    expect(
+      b
+        .requests()
+        .slice(lines.length)
+        .filter((l) => l.includes('ignored')),
+    ).toEqual([])
   })
 
   it('logs a client that gives up while the tab is still prefilling', async () => {

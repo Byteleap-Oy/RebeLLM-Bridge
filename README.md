@@ -84,7 +84,10 @@ WebSearch works through the bridge: Anthropic runs its `web_search` tool itself,
 bridge does instead. The tab gets a `web_search` tool; each search it asks for goes to
 DuckDuckGo from this computer (the page fetch's checks and limits apply), and the tab gets
 the top five results, snippets cut short to save tokens. The request log gets one line per
-search with its result count, never the query.
+search with its result count, never the query. The log also says, per request, what the tab
+did not get: content blocks it cannot take (images, documents) by type and count, a forced
+`tool_choice`, and server tools other than web search, so you can see whether your tools
+need something the protocol lacks.
 
 On a work machine Claude Code may be pinned to the company's endpoint or cloud provider.
 The launcher blanks `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_USE_*`

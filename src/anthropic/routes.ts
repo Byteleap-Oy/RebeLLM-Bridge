@@ -250,6 +250,7 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
     const estimate = estimateTokens(parsed.input)
     const rlog = requestLog(o.log, '/v1/messages', id)
     rlog.arrived(estimate, parsed.input.tools?.length ?? 0)
+    rlog.ignored(parsed.ignored)
     const refuse = (status: number, type: ErrorType, message: string) => {
       rlog.refused(status, message)
       sendApiError(res, status, type, message)

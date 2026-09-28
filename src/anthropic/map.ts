@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { ChatMessage, StopReason as TabStop, ToolCall, ToolSchema, Usage as TabUsage } from '../protocol.js'
+import type { Ignored } from '../reqlog.js'
 import type { ChatInput } from '../tab.js'
 import type { ApiError, ContentBlock, Message, StopReason, ToolUseBlock, Usage } from './types.js'
 
@@ -18,7 +19,8 @@ export interface SearchTool {
 }
 
 export type ParsedMessages =
-  { input: ChatInput; stream: boolean; stopSequences: string[]; search?: SearchTool } | { error: string }
+  | { input: ChatInput; stream: boolean; stopSequences: string[]; search?: SearchTool; ignored: Ignored }
+  | { error: string }
 
 export const SEARCH_NAME = 'web_search'
 /** Searches a request may run when its tool names no `max_uses`. */
@@ -37,34 +39,42 @@ export const SEARCH_SCHEMA: ToolSchema = {
 /** A content block the tab cannot take, as text it can. */
 const omitted = (type: string) => `[${type} omitted]`
 
-function blockText(b: unknown, at: string): string | { error: string } {
+function blockText(b: unknown, at: string, ignored: Ignored): string | { error: string } {
   if (!isObj(b) || !isStr(b.type)) return { error: `${at} must be a content block with a type` }
-  if (b.type !== 'text') return omitted(b.type)
+  if (b.type !== 'text') {
+    ignored.blocks[b.type] = (ignored.blocks[b.type] ?? 0) + 1
+    return omitted(b.type)
+  }
   return isStr(b.text) ? b.text : { error: `${at}.text must be a string` }
 }
 
-function blocksText(blocks: unknown[], path: string): string | { error: string } {
+function blocksText(blocks: unknown[], path: string, ignored: Ignored): string | { error: string } {
   const parts: string[] = []
   for (const [j, b] of blocks.entries()) {
-    const text = blockText(b, `${path}.${j}`)
+    const text = blockText(b, `${path}.${j}`, ignored)
     if (!isStr(text)) return text
     parts.push(text)
   }
   return parts.join('\n\n')
 }
 
-function systemText(s: unknown): string | { error: string } {
+function systemText(s: unknown, ignored: Ignored): string | { error: string } {
   if (absent(s)) return ''
   if (isStr(s)) return s
   if (!Array.isArray(s)) return { error: 'system must be a string or an array of text blocks' }
-  return blocksText(s, 'system')
+  return blocksText(s, 'system', ignored)
 }
 
-function toolResult(b: Obj, path: string, names: Map<string, string>): ChatMessage | { error: string } {
+function toolResult(
+  b: Obj,
+  path: string,
+  names: Map<string, string>,
+  ignored: Ignored,
+): ChatMessage | { error: string } {
   if (!isStr(b.tool_use_id)) return { error: `${path}.tool_use_id must be a string` }
   let text: string | { error: string } = ''
   if (isStr(b.content)) text = b.content
-  else if (Array.isArray(b.content)) text = blocksText(b.content, `${path}.content`)
+  else if (Array.isArray(b.content)) text = blocksText(b.content, `${path}.content`, ignored)
   else if (!absent(b.content)) return { error: `${path}.content must be a string or an array of blocks` }
   if (!isStr(text)) return text
   const name = names.get(b.tool_use_id)
@@ -72,7 +82,12 @@ function toolResult(b: Obj, path: string, names: Map<string, string>): ChatMessa
 }
 
 /** One user message: text in order, each tool result its own `tool` message. */
-function userMessages(content: unknown[], path: string, names: Map<string, string>): ChatMessage[] | { error: string } {
+function userMessages(
+  content: unknown[],
+  path: string,
+  names: Map<string, string>,
+  ignored: Ignored,
+): ChatMessage[] | { error: string } {
   const out: ChatMessage[] = []
   let texts: string[] | null = null
   const flush = () => {
@@ -84,12 +99,12 @@ function userMessages(content: unknown[], path: string, names: Map<string, strin
     if (!isObj(b) || !isStr(b.type)) return { error: `${at} must be a content block with a type` }
     if (b.type === 'tool_result') {
       flush()
-      const m = toolResult(b, at, names)
+      const m = toolResult(b, at, names, ignored)
       if ('error' in m) return m
       out.push(m)
       continue
     }
-    const text = blockText(b, at)
+    const text = blockText(b, at, ignored)
     if (!isStr(text)) return text
     ;(texts ??= []).push(text)
   }
@@ -132,7 +147,10 @@ function searchTool(t: Obj): SearchTool {
   }
 }
 
-function toolSchemas(tools: unknown): { tools: ToolSchema[]; search?: SearchTool } | { error: string } {
+function toolSchemas(
+  tools: unknown,
+  ignored: Ignored,
+): { tools: ToolSchema[]; search?: SearchTool } | { error: string } {
   if (!Array.isArray(tools)) return { error: 'tools must be an array' }
   const out: ToolSchema[] = []
   let search: SearchTool | undefined
@@ -143,7 +161,10 @@ function toolSchemas(tools: unknown): { tools: ToolSchema[]; search?: SearchTool
       continue
     }
     // Other server tools (code execution, ...) run at Anthropic; the tab has none.
-    if (!absent(t.type) && t.type !== 'custom') continue
+    if (!absent(t.type) && t.type !== 'custom') {
+      ignored.serverTools.push(String(t.type))
+      continue
+    }
     if (!isStr(t.name) || !t.name) return { error: `tools.${i}.name must be a non-empty string` }
     if (!absent(t.description) && !isStr(t.description)) return { error: `tools.${i}.description must be a string` }
     if (!absent(t.input_schema) && !isObj(t.input_schema)) return { error: `tools.${i}.input_schema must be an object` }
@@ -166,7 +187,8 @@ export function toChatInput(body: unknown): ParsedMessages {
   if (!isObj(body)) return { error: 'the body must be a JSON object' }
   if (!Array.isArray(body.messages) || !body.messages.length) return { error: 'messages must be a non-empty array' }
   const messages: ChatMessage[] = []
-  const system = systemText(body.system)
+  const ignored: Ignored = { blocks: {}, serverTools: [] }
+  const system = systemText(body.system, ignored)
   if (!isStr(system)) return system
   if (system) messages.push({ role: 'system', content: system })
   // A tool result names its call only by id; the tab wants the tool's name.
@@ -180,7 +202,7 @@ export function toChatInput(body: unknown): ParsedMessages {
       return { error: `${path}.content must be a string or an array of content blocks` }
     // Chat templates take a system message only at the start (Qwen's raises otherwise).
     if (m.role === 'system') {
-      const text = isStr(m.content) ? m.content : blocksText(m.content, `${path}.content`)
+      const text = isStr(m.content) ? m.content : blocksText(m.content, `${path}.content`, ignored)
       if (!isStr(text)) return text
       messages.push({ role: 'user', content: text })
       continue
@@ -191,7 +213,7 @@ export function toChatInput(body: unknown): ParsedMessages {
     }
     const out =
       m.role === 'user'
-        ? userMessages(m.content, `${path}.content`, names)
+        ? userMessages(m.content, `${path}.content`, names, ignored)
         : assistantMessage(m.content, `${path}.content`, names)
     if ('error' in out) return out
     messages.push(...(Array.isArray(out) ? out : [out]))
@@ -199,8 +221,11 @@ export function toChatInput(body: unknown): ParsedMessages {
   const input: ChatInput = { messages }
   let search: SearchTool | undefined
   const choice = body.tool_choice
+  // The protocol has no forced choice; the tab's model picks.
+  if (isObj(choice) && (choice.type === 'any' || choice.type === 'tool'))
+    ignored.toolChoice = choice.type === 'any' ? 'any' : isStr(choice.name) ? `tool ${choice.name}` : 'tool'
   if (!absent(body.tools) && !(isObj(choice) && choice.type === 'none')) {
-    const parsed = toolSchemas(body.tools)
+    const parsed = toolSchemas(body.tools, ignored)
     if ('error' in parsed) return parsed
     if (parsed.tools.length) input.tools = parsed.tools
     search = parsed.search
@@ -222,7 +247,7 @@ export function toChatInput(body: unknown): ParsedMessages {
       return { error: 'stop_sequences must be an array of strings' }
     stopSequences = body.stop_sequences.filter((s) => s.length > 0)
   }
-  return { input, stream: body.stream === true, stopSequences, ...(search ? { search } : {}) }
+  return { input, stream: body.stream === true, stopSequences, ...(search ? { search } : {}), ignored }
 }
 
 /** Rough prompt size without a tokenizer: `ceil(chars / 3.5)` over messages, calls and tools. */

@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change anthropic-messages. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Messages endpoint
 
 The bridge SHALL serve `POST /v1/messages` in the Anthropic Messages API format, answer
@@ -55,7 +57,11 @@ The bridge SHALL accept content it cannot pass on: image and document blocks bec
 placeholder text, thinking blocks and server tools other than web search are dropped, a
 `system` message inside `messages` becomes a `user` message with its text in the same
 place (the tab's chat templates take a system message only at the start), and unsupported
-parameters are ignored.
+parameters are ignored. For each `/v1/messages` request the bridge SHALL write one request
+log line naming what the tab did not get: each content block type it replaced with a
+placeholder and how many, a `tool_choice` of `any` or of a named tool (with the tool's
+name), and the type of each server tool it dropped; the line SHALL be absent when nothing
+was ignored, and SHALL carry no message content.
 
 #### Scenario: Image in a user message
 
@@ -66,6 +72,16 @@ parameters are ignored.
 
 - **WHEN** `messages` holds a user message followed by a `system` message, as Claude Code sends them
 - **THEN** the tab's `chat` has the top-level `system` first and that message's text as a `user` message after the user's
+
+#### Scenario: Ignored input logged
+
+- **WHEN** a request carries two image blocks, a document block, `tool_choice: { type: 'tool', name: 'Read' }` and a `web_fetch_20250910` server tool
+- **THEN** the request log reads `ignored 2 image blocks, 1 document block, tool_choice tool Read, server tool web_fetch_20250910` after the arrival line
+
+#### Scenario: Nothing ignored
+
+- **WHEN** a request carries only text blocks, custom tools and `tool_choice: { type: 'auto' }`
+- **THEN** the request log has no `ignored` line for it
 
 ### Requirement: Stop sequences
 
@@ -171,4 +187,3 @@ with its result count or error, never the query.
 
 - **WHEN** `max_uses` is 1 and the tab calls `web_search` twice in one round
 - **THEN** the second result block holds `error_code: 'max_uses_exceeded'` and the next `chat` offers no `web_search` tool
-

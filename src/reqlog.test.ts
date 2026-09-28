@@ -34,6 +34,24 @@ describe('requestLog', () => {
     ])
   })
 
+  it('names what the tab did not get, or nothing', () => {
+    const { lines, log } = setup()
+    log.ignored({
+      blocks: { image: 2, document: 1 },
+      toolChoice: 'tool Read',
+      serverTools: ['web_fetch_20250910', 'code_execution_20250522'],
+    })
+    log.ignored({ blocks: { image: 1 }, serverTools: [] })
+    log.ignored({ blocks: {}, toolChoice: 'any', serverTools: [] })
+    log.ignored({ blocks: {}, serverTools: [] })
+    expect(lines).toEqual([
+      'chat msg_ab12 /v1/messages: ignored 2 image blocks, 1 document block, tool_choice tool Read, ' +
+        'server tool web_fetch_20250910, server tool code_execution_20250522',
+      'chat msg_ab12 /v1/messages: ignored 1 image block',
+      'chat msg_ab12 /v1/messages: ignored tool_choice any',
+    ])
+  })
+
   it('logs each search by its result count or error, never the query', () => {
     const { lines, log, advance } = setup()
     advance(2500)

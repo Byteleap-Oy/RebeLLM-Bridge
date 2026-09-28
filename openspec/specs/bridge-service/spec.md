@@ -111,9 +111,10 @@ port, the MCP server SHALL use that bridge instead of failing.
 
 ### Requirement: Request log
 The bridge SHALL write one log line per request event, with the request's id, route and
-seconds since arrival: arrival with the estimated prompt tokens and tool count, queue
-position, first token, end with the stop reason and output tokens, a client abort, a
-refusal, or an error; message content SHALL never be logged; `--quiet` SHALL silence it.
+seconds since arrival: arrival with the estimated prompt tokens and tool count, what of the
+request the tab did not get (when anything), queue position, first token, end with the stop
+reason and output tokens, a client abort, a refusal, or an error; message content SHALL
+never be logged; `--quiet` SHALL silence it.
 
 #### Scenario: Client gives up
 - **WHEN** an HTTP client closes its connection 600 s into a request that has produced no token

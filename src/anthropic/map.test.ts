@@ -86,7 +86,45 @@ describe('toChatInput', () => {
       },
       stream: true,
       stopSequences: ['END'],
+      ignored: { blocks: { image: 1, document: 1 }, serverTools: ['code_execution_20250522'] },
     })
+  })
+
+  it('collects what the tab does not get, so the log can say so', () => {
+    const none = { blocks: {}, serverTools: [] }
+    expect(
+      toChatInput({ messages: [user('hi')], tools: [{ name: 'Read' }], tool_choice: { type: 'auto' } }),
+    ).toMatchObject({ ignored: none })
+    expect(toChatInput({ messages: [user('hi')], tool_choice: { type: 'any' } })).toMatchObject({
+      ignored: { ...none, toolChoice: 'any' },
+    })
+    expect(toChatInput({ messages: [user('hi')], tool_choice: { type: 'tool', name: 'Read' } })).toMatchObject({
+      ignored: { ...none, toolChoice: 'tool Read' },
+    })
+    expect(toChatInput({ messages: [user('hi')], tool_choice: { type: 'tool' } })).toMatchObject({
+      ignored: { ...none, toolChoice: 'tool' },
+    })
+    // System blocks, tool results (a screenshot) and mid-conversation system messages count too.
+    const r = toChatInput({
+      system: [
+        { type: 'text', text: 's' },
+        { type: 'image', source: {} },
+      ],
+      messages: [
+        user([
+          { type: 'image', source: {} },
+          { type: 'image', source: {} },
+        ]),
+        { role: 'system', content: [{ type: 'document', source: {} }] },
+        user([{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', source: {} }] }]),
+      ],
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search' },
+        { type: 'web_fetch_20250910', name: 'web_fetch' },
+      ],
+    })
+    expect(r).toMatchObject({ ignored: { blocks: { image: 4, document: 1 }, serverTools: ['web_fetch_20250910'] } })
+    expect(r).not.toHaveProperty('ignored.toolChoice')
   })
 
   it('offers the tab a web_search tool for the server tool, with its limits', () => {
@@ -143,6 +181,7 @@ describe('toChatInput', () => {
       },
       stream: false,
       stopSequences: [],
+      ignored: { blocks: {}, serverTools: [] },
     })
   })
 
@@ -187,6 +226,7 @@ describe('toChatInput', () => {
       },
       stream: false,
       stopSequences: [],
+      ignored: { blocks: {}, serverTools: [] },
     })
   })
 
