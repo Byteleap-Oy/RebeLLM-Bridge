@@ -1,6 +1,6 @@
 {
   "name": "rebellm-bridge",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Use the model in your RebeLLM browser tab from the command line, OpenAI/Anthropic clients and Claude Code",
   "keywords": [
     "rebellm",
