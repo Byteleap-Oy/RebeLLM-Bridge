@@ -60,7 +60,9 @@ rebellm-claude -p "What is 2 + 3?"
 ```
 
 It reuses a running bridge or starts one, waits for the tab, sets the tab's context size
-and a long request timeout, and passes every other argument to `claude`. Options:
+(and a quarter of it as the answer's reserve, so Claude Code compacts only when the conversation
+nears the context, not on every turn of a 32k tab) and a long request timeout, and passes every
+other argument to `claude`. Options:
 `--claude <path>`, `--shared-config` (use your normal Claude Code config), `--port <n>`.
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
 with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request,

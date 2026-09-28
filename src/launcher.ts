@@ -138,7 +138,14 @@ export function bridgeEnv(base: string, contextTokens?: number): Record<string, 
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: '21600000',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     // Claude Code assumes 200k for a model it does not know; it should compact within the tab's.
-    ...(contextTokens ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextTokens) } : {}),
+    // Claude Code keeps its answer's reserve out of the window before it compacts: 20 000 for an
+    // unknown model, which left 12 768 of a 32k tab, less than its own system prompt.
+    ...(contextTokens
+      ? {
+          CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(contextTokens),
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.floor(contextTokens / 4)),
+        }
+      : {}),
   }
 }
 

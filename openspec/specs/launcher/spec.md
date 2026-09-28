@@ -13,7 +13,8 @@ code, and give the child an environment that sends every model request to the br
 `API_TIMEOUT_MS`, `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` and `CLAUDE_STREAM_IDLE_TIMEOUT_MS`
 raised to six hours (the stream watchdog does not count `ping` events, and a long prompt takes
 the tab more than half an hour to read), non-essential traffic disabled,
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS` set to the tab's context size when the tab reports one, and
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` set to the tab's context size and `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+to a quarter of it when the tab reports one, and
 `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`,
 `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` blanked, so nothing from the shell
 outranks the bridge. The same variables SHALL reach `claude` as `--settings <file>` from a
@@ -50,6 +51,10 @@ either.
 
 - **WHEN** the tab takes 40 minutes to read a prompt before its first token
 - **THEN** `claude` keeps waiting: its stream idle timeout is six hours
+
+#### Scenario: Auto-compact window
+- **WHEN** the connected tab reports a context of 32768 tokens
+- **THEN** `claude` gets `CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192`, so its auto-compact window is 24576 tokens and a new session does not compact at once
 
 ### Requirement: Isolated config
 
