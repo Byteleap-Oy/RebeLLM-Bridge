@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { tokenFile } from './cli.js'
 import {
+  DEFAULT_ALLOW,
   MISSING,
   QUIET_SETTINGS,
   bridgeEnv,
@@ -89,14 +90,28 @@ async function until(ok: () => boolean) {
 
 describe('parseLauncher', () => {
   it('takes its own flags anywhere and passes the rest in order', () => {
-    expect(parseLauncher([])).toEqual({ sharedConfig: false, port: 7343, args: [] })
+    expect(parseLauncher([])).toEqual({ sharedConfig: false, port: 7343, allow: [], args: [] })
     expect(
       parseLauncher(['-p', 'What is 2 + 3?', '--port', '8000', '--claude=/opt/claude', '--shared-config', '--verbose']),
-    ).toEqual({ claude: '/opt/claude', sharedConfig: true, port: 8000, args: ['-p', 'What is 2 + 3?', '--verbose'] })
+    ).toEqual({
+      claude: '/opt/claude',
+      sharedConfig: true,
+      port: 8000,
+      allow: [],
+      args: ['-p', 'What is 2 + 3?', '--verbose'],
+    })
     expect(parseLauncher(['--port=0', '--', '--port', '3'])).toEqual({
       sharedConfig: false,
       port: 0,
+      allow: [],
       args: ['--port', '3'],
+    })
+    // One rule per flag: a specifier may hold commas.
+    expect(parseLauncher(['--allow', 'Edit', '--allow=Bash(echo a, b)', '-p', 'x', '--', '--allow', 'Write'])).toEqual({
+      sharedConfig: false,
+      port: 7343,
+      allow: ['Edit', 'Bash(echo a, b)'],
+      args: ['-p', 'x', '--allow', 'Write'],
     })
   })
 
@@ -105,6 +120,8 @@ describe('parseLauncher', () => {
     expect(parseLauncher(['--claude='])).toEqual({ error: '--claude needs a value' })
     expect(parseLauncher(['--port', ' '])).toEqual({ error: '--port needs a value' })
     expect(parseLauncher(['--port', 'x'])).toEqual({ error: '--port x is not a port number' })
+    expect(parseLauncher(['--allow', ''])).toEqual({ error: '--allow needs a value' })
+    expect(parseLauncher(['--allow'])).toEqual({ error: '--allow needs a value' })
   })
 })
 
@@ -182,8 +199,13 @@ describe('environment and settings', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
       skipWebFetchPreflight: true,
-      permissions: { allow: ['WebFetch', 'WebSearch'] },
+      permissions: { allow: [...DEFAULT_ALLOW] },
       env: { A: '1' },
+    })
+    expect(DEFAULT_ALLOW).toEqual(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
+    writeLaunchSettings(file, { A: '1' }, ['Edit', 'Bash(npm test:*)', 'Edit', 'Read'])
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { permissions: unknown }).permissions).toEqual({
+      allow: [...DEFAULT_ALLOW, 'Edit', 'Bash(npm test:*)'],
     })
     expect(QUIET_SETTINGS).toEqual({
       awaySummaryEnabled: false,
@@ -220,7 +242,7 @@ describe('launch', () => {
     const stub = stubClaude()
     const home = temp()
     const err = sink()
-    const argv = ['-p', 'What is 2 + 3?', '--port', String(b.server.port), 'say "hi" & exit']
+    const argv = ['-p', 'What is 2 + 3?', '--port', String(b.server.port), '--allow', 'Edit', 'say "hi" & exit']
     const managed = join(home, 'managed-settings.json')
     writeFileSync(managed, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://corp' }, apiKeyHelper: 'x' }))
     const code = await launch(argv, {
@@ -254,7 +276,7 @@ describe('launch', () => {
     expect(JSON.parse(readFileSync(launchSettingsFile(home, b.server.port), 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
       skipWebFetchPreflight: true,
-      permissions: { allow: ['WebFetch', 'WebSearch'] },
+      permissions: { allow: [...DEFAULT_ALLOW, 'Edit'] },
       env: bridgeEnv(b.base, 32768),
     })
     expect((await fetch(`${b.base}/health`)).status).toBe(200)

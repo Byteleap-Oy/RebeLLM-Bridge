@@ -18,13 +18,15 @@ import { TOKEN_ENV, VERSION, bridgeHealth, keepToken, resolveToken, tokenFile, t
 import { DEFAULT_PORT, startServer, type BridgeServer } from './server.js'
 import type { Health } from './tab.js'
 
-export const USAGE = `Usage: rebellm-claude [--claude <path>] [--shared-config] [--port <n>] [claude arguments]
+export const USAGE = `Usage: rebellm-claude [--claude <path>] [--shared-config] [--port <n>] [--allow <rule>]... [claude arguments]
 
 Runs Claude Code on the model in your RebeLLM tab, through rebellm-bridge.
 
   --claude <path>   the claude executable (default: claude on PATH)
   --shared-config   use your normal Claude Code config instead of ~/.rebellm-bridge/claude
   --port <n>        the bridge's port (default ${DEFAULT_PORT}); a bridge already there is reused
+  --allow <rule>    a Claude Code permission rule to allow as well, e.g. Edit or 'Bash(npm test:*)';
+                    repeat for more (the launcher allows Read, Glob, Grep, WebFetch and WebSearch)
 
 Everything else, and everything after --, goes to claude.`
 
@@ -44,13 +46,15 @@ export interface LauncherOptions {
   claude?: string
   sharedConfig: boolean
   port: number
+  /** Permission rules to allow beside the launcher's own, in order. */
+  allow: string[]
   /** For claude, in order. */
   args: string[]
 }
 
 /** Takes the launcher's own flags out of `argv`; everything else passes to claude. */
 export function parseLauncher(argv: string[]): LauncherOptions | { error: string } {
-  const o: LauncherOptions = { sharedConfig: false, port: DEFAULT_PORT, args: [] }
+  const o: LauncherOptions = { sharedConfig: false, port: DEFAULT_PORT, allow: [], args: [] }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === '--') {
@@ -61,10 +65,11 @@ export function parseLauncher(argv: string[]): LauncherOptions | { error: string
     const flag = eq > 0 ? arg.slice(0, eq) : arg
     if (flag === '--shared-config' && eq < 0) {
       o.sharedConfig = true
-    } else if (flag === '--claude' || flag === '--port') {
+    } else if (flag === '--claude' || flag === '--port' || flag === '--allow') {
       const value = eq > 0 ? arg.slice(eq + 1) : argv[++i]
       if (!value?.trim()) return { error: `${flag} needs a value` }
       if (flag === '--claude') o.claude = value
+      else if (flag === '--allow') o.allow.push(value.trim())
       else {
         const port = Number(value)
         if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -178,20 +183,23 @@ export const QUIET_SETTINGS = {
   showThinkingSummaries: false,
 } as const
 
-/** Allow rules skip auto mode's classifier, which the tab model cannot answer before it times out. */
-export const PERMISSIONS = { allow: ['WebFetch', 'WebSearch'] } as const
+/**
+ * Allow rules skip auto mode's classifier, which the tab model cannot answer before it times out.
+ * Only tools that change nothing; the user adds the rest with --allow.
+ */
+export const DEFAULT_ALLOW = ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'] as const
 
 /** WebFetch fails whenever its hostname check at api.anthropic.com cannot answer. */
 export const SKIP_FETCH_PREFLIGHT = { skipWebFetchPreflight: true } as const
 
-export function writeLaunchSettings(file: string, env: Record<string, string>): void {
+/** `allow` holds the user's rules; they follow the defaults, once each. */
+export function writeLaunchSettings(file: string, env: Record<string, string>, allow: string[] = []): void {
+  const permissions = { allow: [...new Set([...DEFAULT_ALLOW, ...allow])] }
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   writeFileSync(
     file,
-    `${JSON.stringify({ ...QUIET_SETTINGS, ...SKIP_FETCH_PREFLIGHT, permissions: PERMISSIONS, env }, null, 2)}\n`,
-    {
-      mode: 0o600,
-    },
+    `${JSON.stringify({ ...QUIET_SETTINGS, ...SKIP_FETCH_PREFLIGHT, permissions, env }, null, 2)}\n`,
+    { mode: 0o600 },
   )
 }
 
@@ -320,7 +328,7 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
     const dir = o.sharedConfig ? null : configDir(home)
     const ours = bridgeEnv(base, health.contextTokens)
     const settings = launchSettingsFile(home, Number(new URL(base).port))
-    writeLaunchSettings(settings, ours)
+    writeLaunchSettings(settings, ours, o.allow)
     const managed = io.managedFile ?? managedSettingsFile(platform, io.env)
     const overrides = managedOverrides(managed)
     if (overrides.length)

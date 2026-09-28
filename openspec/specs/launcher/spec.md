@@ -2,13 +2,15 @@
 
 ## Purpose
 TBD - created by archiving change anthropic-messages. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Launch Claude Code on the tab model
 
 `rebellm-claude` SHALL run `claude` with inherited stdio, pass through all arguments it
-does not own (`--claude <path>`, `--shared-config`, `--port <n>`), return `claude`'s exit
-code, and give the child an environment that sends every model request to the bridge:
-`ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH_TOKEN`,
+does not own (`--claude <path>`, `--shared-config`, `--port <n>`, `--allow <rule>`), return
+`claude`'s exit code, and give the child an environment that sends every model request to
+the bridge: `ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL` set,
 `API_TIMEOUT_MS`, `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` and `CLAUDE_STREAM_IDLE_TIMEOUT_MS`
 raised to six hours (the stream watchdog does not count `ping` events, and a long prompt takes
@@ -31,6 +33,11 @@ either.
 
 - **WHEN** the user runs `rebellm-claude -p "What is 2 + 3?"`
 - **THEN** `claude` is started with `--settings <file>`, `-p` and `What is 2 + 3?` and the bridge environment
+
+#### Scenario: Allow rules are the launcher's
+
+- **WHEN** the user runs `rebellm-claude --allow Edit -p "Fix the typo"`
+- **THEN** `claude` is started with `--settings <file>`, `-p` and `Fix the typo`, and `--allow Edit` is not among its arguments
 
 #### Scenario: Exit code
 
@@ -161,29 +168,49 @@ the launcher. A missing or unreadable file SHALL be silent.
 - **THEN** the launcher prints nothing about it
 
 ### Requirement: Launcher option values
-`rebellm-claude` SHALL refuse a blank `--port` or `--claude` value, and SHALL store a newly
-created token only once the bridge it started is listening.
+`rebellm-claude` SHALL refuse a blank `--port`, `--claude` or `--allow` value, and SHALL store
+a newly created token only once the bridge it started is listening.
 
 #### Scenario: Blank port
 - **WHEN** the launcher is started with `--port ' '`
 - **THEN** it exits with the error `--port needs a value`
 
-### Requirement: Web tools allowed
+#### Scenario: Blank allow rule
+- **WHEN** the launcher is started with `--allow ''`
+- **THEN** it exits with the error `--allow needs a value`
 
-The `--settings` file the launcher writes SHALL allow Claude Code's `WebFetch` and
-`WebSearch` tools on every domain (`permissions.allow` holding both), so neither waits on
-auto mode's classifier, which the tab model cannot answer in time, nor prompts in the
-other modes. It SHALL allow nothing else. It SHALL also set `skipWebFetchPreflight` to
-true, so a fetch does not fail when Claude Code's hostname check at `api.anthropic.com`
-cannot answer.
+### Requirement: Tools allowed
+
+The `--settings` file the launcher writes SHALL allow Claude Code's read-only tools `Read`,
+`Glob` and `Grep` and its `WebFetch` and `WebSearch` tools on every path and domain
+(`permissions.allow` holding all five), so none waits on auto mode's classifier, which the
+tab model cannot answer in time, nor prompts in the other modes. Each `--allow <rule>` given
+to the launcher SHALL add that Claude Code permission rule after them, once, in the order
+given; the launcher SHALL add nothing else, so `Bash`, `Edit` and `Write` are allowed only
+when the user asks. It SHALL also set `skipWebFetchPreflight` to true, so a fetch does not
+fail when Claude Code's hostname check at `api.anthropic.com` cannot answer.
 
 #### Scenario: Settings file
 
-- **WHEN** the launcher writes its settings file
-- **THEN** the file's `permissions.allow` is exactly `["WebFetch", "WebSearch"]` and `skipWebFetchPreflight` is true
+- **WHEN** the launcher writes its settings file with no `--allow`
+- **THEN** the file's `permissions.allow` is exactly `["Read", "Glob", "Grep", "WebFetch", "WebSearch"]` and `skipWebFetchPreflight` is true
+
+#### Scenario: User rules
+
+- **WHEN** the launcher runs with `--allow Edit --allow 'Bash(npm test:*)' --allow Edit`
+- **THEN** the file's `permissions.allow` is the five defaults followed by `Edit` and `Bash(npm test:*)`
 
 #### Scenario: Fetch in auto mode
 
 - **WHEN** Claude asks to fetch `https://www.hs.fi/` in auto mode under `rebellm-claude`
 - **THEN** Claude Code runs the fetch without asking the classifier or `api.anthropic.com`
 
+#### Scenario: Read outside the project in auto mode
+
+- **WHEN** Claude asks to read `~/.rebellm-bridge/bridge.log` in auto mode under `rebellm-claude`
+- **THEN** Claude Code reads it without asking the classifier
+
+#### Scenario: Edit stays with Claude Code
+
+- **WHEN** the launcher runs with no `--allow` and Claude asks to edit a file in auto mode
+- **THEN** Claude Code decides as it would without the launcher; the settings file allows no `Edit`

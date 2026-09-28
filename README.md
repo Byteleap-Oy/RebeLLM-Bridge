@@ -63,18 +63,22 @@ It reuses a running bridge or starts one, waits for the tab, sets the tab's cont
 (and a quarter of it as the answer's reserve, so Claude Code compacts only when the conversation
 nears the context, not on every turn of a 32k tab) and a long request timeout, and passes every
 other argument to `claude`. Options:
-`--claude <path>`, `--shared-config` (use your normal Claude Code config), `--port <n>`.
+`--claude <path>`, `--shared-config` (use your normal Claude Code config), `--port <n>`,
+`--allow <rule>` (see below).
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
 with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request,
 stream and subagent timeouts to six hours, so a request that shows nothing for half an hour is
 prefilling, not stuck (the Bridge log in the tab shows it). A plain (non-streamed) answer gets
 its headers after 10 s and a space every 10 s until it is ready, which Claude Code's fallback
-after a failed stream would otherwise give up on after about six minutes. It also allows `WebFetch` and
+after a failed stream would otherwise give up on after about six minutes. It also allows the
+tools that change nothing, `Read`, `Glob` and `Grep` on every path and `WebFetch` and
 `WebSearch` on every domain: auto mode would ask its safety classifier first, on the tab
-model, and that times out. Add them to `"deny"` or `"ask"` under `permissions` in your
-settings to take it back. It also sets `skipWebFetchPreflight`, so WebFetch no longer asks
-`api.anthropic.com` whether a host is blocked; when that check cannot answer, every fetch
-fails.
+model, and that times out (what they read goes only to the tab on this computer). Anything
+else stays with Claude Code's own rules; `--allow <rule>` adds a permission rule of your
+choosing, one per flag, for example `--allow Edit --allow 'Bash(npm test:*)'`. Add a tool to
+`"deny"` or `"ask"` under `permissions` in your settings to take it back. It also sets
+`skipWebFetchPreflight`, so WebFetch no longer asks `api.anthropic.com` whether a host is
+blocked; when that check cannot answer, every fetch fails.
 
 WebSearch works through the bridge: Anthropic runs its `web_search` tool itself, so the
 bridge does instead. The tab gets a `web_search` tool; each search it asks for goes to
