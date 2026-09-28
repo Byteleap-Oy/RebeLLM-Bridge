@@ -273,6 +273,34 @@ describe('POST /v1/messages', () => {
     })
   })
 
+  it('keeps a slow plain answer busy with spaces before its JSON; a quick one has none', async () => {
+    const b = await bridge({ keepAliveMs: 20 })
+    const tab = await b.tab('qwen')
+    let delayMs = 150
+    tab.onChat = (c) => setTimeout(() => tab.answer(c.id, ['late']), delayMs)
+    const slow = await post(b.base, { max_tokens: 5, messages: [user('hi')] })
+    expect(slow.status).toBe(200)
+    expect(slow.headers.get('content-type')).toContain('application/json')
+    const text = await slow.text()
+    expect(text).toMatch(/^ {2,}\{/)
+    expect(JSON.parse(text)).toMatchObject({ type: 'message', content: [{ type: 'text', text: 'late' }] })
+    delayMs = 0
+    const quick = await (await post(b.base, { max_tokens: 5, messages: [user('hi')] })).text()
+    expect(quick.startsWith('{')).toBe(true)
+  })
+
+  it('a tab failure after the spaces began ends the 200 body with the error object', async () => {
+    const b = await bridge({ keepAliveMs: 20 })
+    const tab = await b.tab('qwen')
+    tab.onChat = (c) => setTimeout(() => tab.send({ t: 'error', id: c.id, message: 'out of memory' }), 150)
+    const r = await post(b.base, { max_tokens: 5, messages: [user('hi')] })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(await r.text())).toEqual({
+      type: 'error',
+      error: { type: 'api_error', message: 'out of memory' },
+    })
+  })
+
   it('answers 502 when the tab fails, and ends a stream with an error event', async () => {
     const b = await bridge()
     const tab = await b.tab()

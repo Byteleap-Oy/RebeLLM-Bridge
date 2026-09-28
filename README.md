@@ -63,9 +63,11 @@ It reuses a running bridge or starts one, waits for the tab, sets the tab's cont
 and a long request timeout, and passes every other argument to `claude`. Options:
 `--claude <path>`, `--shared-config` (use your normal Claude Code config), `--port <n>`.
 Claude Code's first request is ~11k tokens of system prompt and tools, so it needs a tab
-with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request
-and subagent timeouts to hours, so a subagent that shows nothing for twenty minutes is
-prefilling, not stuck (the Bridge log in the tab shows it). It also allows `WebFetch` and
+with a 32k context and patience on a slow GPU: the launcher raises Claude Code's request,
+stream and subagent timeouts to six hours, so a request that shows nothing for half an hour is
+prefilling, not stuck (the Bridge log in the tab shows it). A plain (non-streamed) answer gets
+its headers after 10 s and a space every 10 s until it is ready, which Claude Code's fallback
+after a failed stream would otherwise give up on after about six minutes. It also allows `WebFetch` and
 `WebSearch` on every domain: auto mode would ask its safety classifier first, on the tab
 model, and that times out. Add them to `"deny"` or `"ask"` under `permissions` in your
 settings to take it back. It also sets `skipWebFetchPreflight`, so WebFetch no longer asks

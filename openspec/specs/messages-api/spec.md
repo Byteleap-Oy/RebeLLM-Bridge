@@ -2,16 +2,16 @@
 
 ## Purpose
 TBD - created by archiving change anthropic-messages. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Messages endpoint
 
 The bridge SHALL serve `POST /v1/messages` in the Anthropic Messages API format, answer
 with a complete message when `stream` is false and with server-sent events in the
 Anthropic event order when `stream` is true, and generate the reply with the connected
 tab's model whatever `model` the request names. Like the OpenAI endpoint it SHALL check no
-API key and wait for a ready model up to the bridge's wait time.
+API key and wait for a ready model up to the bridge's wait time. A non-streamed answer not
+ready after 10 s SHALL get its 200 headers and a space every 10 s until the message follows, so
+a client that gives up on a silent connection keeps waiting.
 
 #### Scenario: Plain answer
 
@@ -27,6 +27,11 @@ API key and wait for a ready model up to the bridge's wait time.
 
 - **WHEN** a streamed answer's first token takes longer than 10 s
 - **THEN** the client receives a `ping` event every 10 s until it comes
+
+#### Scenario: Slow plain answer
+
+- **WHEN** a non-streamed answer takes longer than 10 s
+- **THEN** the response's 200 headers and a space arrive after 10 s, a space every 10 s after, and then the message, which parses as JSON
 
 ### Requirement: Tool use
 
@@ -95,7 +100,8 @@ Every response under `/v1/messages` that is an error SHALL use Anthropic's shape
 'error', error: { type, message } }`: 403 `permission_error` for a request from a web page
 or with a foreign `Host`, 400 `invalid_request_error` for a malformed body or a prompt over
 the tab's context, 503 `api_error` with the reason when no tab or ready model is there after
-the wait, 502 `api_error` when the tab fails or disconnects during a non-streamed answer,
+the wait, 502 `api_error` when the tab fails or disconnects during a non-streamed answer
+before its headers went out, the error object as the body of that 200 response after them,
 and an `error` event that ends the stream when that happens mid-stream.
 
 #### Scenario: No tab
@@ -118,6 +124,11 @@ and an `error` event that ends the stream when that happens mid-stream.
 - **WHEN** the tab answers a streamed chat with `error`
 - **THEN** the stream ends with an `error` event of type `api_error` carrying the tab's message
 
+#### Scenario: Tab fails after the headers of a plain answer
+
+- **WHEN** the tab answers a non-streamed chat with `error` after the bridge sent the 200 headers and spaces
+- **THEN** the body ends with `{ type: 'error', error: { type: 'api_error', message } }` carrying the tab's message
+
 ### Requirement: Token counting
 
 The bridge SHALL serve `POST /v1/messages/count_tokens` with `{ input_tokens }` estimated as
@@ -131,9 +142,9 @@ connected tab.
 
 ### Requirement: Web search
 
-When a request's tools hold a server tool whose `type` starts with `web_search_` and no
-custom tool is named `web_search`, the bridge SHALL offer the tab a function tool
-`web_search` with a required string `query`. Each call the tab makes to it SHALL be run by
+The bridge SHALL offer the tab a function tool `web_search` with a required string `query`
+when a request's tools hold a server tool whose `type` starts with `web_search_` and no custom
+tool is named `web_search`. Each call the tab makes to it SHALL be run by
 the bridge as a search from this computer (DuckDuckGo), answered to the client as a
 `server_tool_use` block named `web_search` with the call's input followed by a
 `web_search_tool_result` block with at most 5 `web_search_result` items (`url`, `title`,
@@ -160,3 +171,4 @@ with its result count or error, never the query.
 
 - **WHEN** `max_uses` is 1 and the tab calls `web_search` twice in one round
 - **THEN** the second result block holds `error_code: 'max_uses_exceeded'` and the next `chat` offers no `web_search` tool
+

@@ -304,18 +304,40 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
       toolUse: (b) => (b.type === 'tool_use' ? calls.push(b) : blocks.push(b)),
       searchResult: (b) => blocks.push(b),
     }
+    // A slow answer gets its headers and a space now and then: some clients drop a silent
+    // connection after minutes, and JSON allows leading whitespace.
+    const pingMs = o.pingMs ?? PING_MS
+    let beat: ReturnType<typeof setInterval> | undefined
+    const start = setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+      res.write(' ')
+      beat = setInterval(() => res.write(' '), pingMs)
+    }, pingMs)
+    const finish = (status: number, body: unknown) => {
+      if (!res.headersSent) return sendJson(res, status, body)
+      res.end(JSON.stringify(body))
+    }
     try {
       const out = await respond(tab, parsed, estimate, gone, collect, rlog, search)
       rlog.done(out.reason, out.usage.output_tokens)
       const answered = blocks.length || calls.length ? [...blocks, ...calls] : content('', [])
-      sendJson(res, 200, message(meta, answered, { reason: out.reason, sequence: out.sequence }, out.usage))
+      finish(200, message(meta, answered, { reason: out.reason, sequence: out.sequence }, out.usage))
     } catch (e) {
       if (gone.aborted) return rlog.aborted()
       const err = e as ChatError
-      if (err instanceof ChatError && err.kind === 'no_tab') return refuse(503, 'api_error', err.message)
-      rlog.error(err)
-      const api = tabError(err.message)
-      sendApiError(res, api.type === 'invalid_request_error' ? 400 : 502, api.type, api.message)
+      const api =
+        err instanceof ChatError && err.kind === 'no_tab'
+          ? { type: 'api_error' as const, message: err.message }
+          : tabError(err.message)
+      const status =
+        err instanceof ChatError && err.kind === 'no_tab' ? 503 : api.type === 'invalid_request_error' ? 400 : 502
+      if (status === 503 && !res.headersSent) return refuse(503, 'api_error', err.message)
+      if (status === 503) rlog.refused(503, err.message)
+      else rlog.error(err)
+      finish(status, { type: 'error', error: api })
+    } finally {
+      clearTimeout(start)
+      clearInterval(beat)
     }
   }
 

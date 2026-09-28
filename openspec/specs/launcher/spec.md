@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change anthropic-messages. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Launch Claude Code on the tab model
 
 `rebellm-claude` SHALL run `claude` with inherited stdio, pass through all arguments it
@@ -12,8 +10,9 @@ does not own (`--claude <path>`, `--shared-config`, `--port <n>`), return `claud
 code, and give the child an environment that sends every model request to the bridge:
 `ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL` set,
-`API_TIMEOUT_MS` and `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` raised to six hours and
-`CLAUDE_STREAM_IDLE_TIMEOUT_MS` to thirty minutes, non-essential traffic disabled,
+`API_TIMEOUT_MS`, `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` and `CLAUDE_STREAM_IDLE_TIMEOUT_MS`
+raised to six hours (the stream watchdog does not count `ping` events, and a long prompt takes
+the tab more than half an hour to read), non-essential traffic disabled,
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` set to the tab's context size when the tab reports one, and
 `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`,
 `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` blanked, so nothing from the shell
@@ -46,6 +45,11 @@ either.
 
 - **WHEN** a subagent's first request takes 20 minutes before its first token
 - **THEN** `claude` waits, because its stall and request timeouts are hours and the bridge's pings keep the stream alive
+
+#### Scenario: Long prompt
+
+- **WHEN** the tab takes 40 minutes to read a prompt before its first token
+- **THEN** `claude` keeps waiting: its stream idle timeout is six hours
 
 ### Requirement: Isolated config
 
@@ -177,3 +181,4 @@ cannot answer.
 
 - **WHEN** Claude asks to fetch `https://www.hs.fi/` in auto mode under `rebellm-claude`
 - **THEN** Claude Code runs the fetch without asking the classifier or `api.anthropic.com`
+
