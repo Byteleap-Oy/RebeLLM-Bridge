@@ -161,6 +161,8 @@ export function bridgeEnv(base: string, contextTokens?: number): Record<string, 
     CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS: '21600000',
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: '21600000',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    // Schemas over 10 % of the context are deferred behind a ToolSearch round: on a 32k tab, all of them.
+    ENABLE_TOOL_SEARCH: 'false',
     // Claude Code assumes 200k for a model it does not know; it should compact within the tab's.
     // Claude Code keeps its answer's reserve out of the window before it compacts: 20 000 for an
     // unknown model, which left 12 768 of a 32k tab, less than its own system prompt.
@@ -245,6 +247,12 @@ export const DEFAULT_DENY = [
   'KillShell',
   'BashOutput',
   'TaskOutput',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+  'EnterWorktree',
+  'ExitWorktree',
+  'SendMessage',
 ] as const
 
 /** WebFetch fails whenever its hostname check at api.anthropic.com cannot answer. */

@@ -16,6 +16,9 @@ the bridge: `ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH
 `API_TIMEOUT_MS`, `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` and `CLAUDE_STREAM_IDLE_TIMEOUT_MS`
 raised to six hours (the stream watchdog does not count `ping` events, and a long prompt takes
 the tab more than half an hour to read), non-essential traffic disabled,
+`ENABLE_TOOL_SEARCH` set to `false` so every tool's schema is in the first request instead
+of behind a `ToolSearch` round (Claude Code defers schemas that exceed 10% of the context,
+which on a 32k tab is every tool set),
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` set to the tab's context size and `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
 to a quarter of it when the tab reports one, and
 `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`,
@@ -29,6 +32,11 @@ either.
 
 - **WHEN** the connected tab reports a context of 32768 tokens
 - **THEN** `claude` gets `CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768`, so it compacts within the tab's context
+
+#### Scenario: Tools up front
+
+- **WHEN** the user runs `rebellm-claude` on a 32k tab
+- **THEN** `claude` gets `ENABLE_TOOL_SEARCH=false`, and its first request carries the schemas of `WebFetch` and `WebSearch` with no `ToolSearch` call before them
 
 #### Scenario: Arguments pass through
 
@@ -192,7 +200,8 @@ when the user asks. The file SHALL deny, by bare name so that Claude Code sends 
 them, the tools a small local model does no good with: `Task`, `Agent`, `TodoWrite`,
 `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, `TaskStop`, `NotebookEdit`,
 `AskUserQuestion`, `Skill`, `SlashCommand`, `EnterPlanMode`, `ExitPlanMode`, `KillShell`,
-`BashOutput` and `TaskOutput`; each `--keep <tool>` SHALL take that name out of the list. It
+`BashOutput`, `TaskOutput`, `CronCreate`, `CronDelete`, `CronList`, `EnterWorktree`,
+`ExitWorktree` and `SendMessage`; each `--keep <tool>` SHALL take that name out of the list. It
 SHALL also set `skipWebFetchPreflight` to true, so a fetch does not fail when Claude Code's
 hostname check at `api.anthropic.com` cannot answer.
 

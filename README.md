@@ -46,7 +46,9 @@ a short system prompt written for a local model (`--system-prompt-file`, kept in
 Claude Code's, and a `--system-prompt` or `--system-prompt-file` you pass is left alone. Its
 settings file also denies, by name, the tools a small model does no good with (sub-agents, task
 lists, notebooks, questions, skills, plan mode, background shells), which keeps their schemas out
-of every request; `--keep Task` brings one back. The request log's arrival line shows where the
+of every request; `--keep Task` brings one back. The tools that remain load up front
+(`ENABLE_TOOL_SEARCH=false`): Claude Code would otherwise defer any schema over 10 % of the
+context behind a `ToolSearch` round, which on a 32k tab is all of them. The request log's arrival line shows where the
 prompt goes (`arrived, 10 006 prompt tokens (system 6 000, tools 4 000, messages 6), 8 tools`),
 so you can see what each choice saves. Claude Code's first request is still several thousand
 tokens, so the launcher raises Claude Code's request, stream and subagent timeouts to six

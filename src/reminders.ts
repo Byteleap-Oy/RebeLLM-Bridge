@@ -6,6 +6,7 @@ const NOISE = [
   /^This is a reminder that your todo list is currently empty/,
   /^Your todo list has changed/,
   /^The user hasn't heard from you in a while/,
+  /^Attribution for git commits and pull requests/,
 ]
 
 const BLOCK = /<system-reminder>\s*([\s\S]*?)<\/system-reminder>/g

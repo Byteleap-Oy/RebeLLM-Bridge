@@ -50,7 +50,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 const pick = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
   'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'API_TIMEOUT_MS', 'ANTHROPIC_CUSTOM_HEADERS',
   'CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS', 'CLAUDE_STREAM_IDLE_TIMEOUT_MS',
-  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
+  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'ENABLE_TOOL_SEARCH', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
   'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
 const env = Object.fromEntries(pick.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]))
 // With STUB_WAIT, claude keeps running until that file exists.
@@ -187,6 +187,7 @@ describe('environment and settings', () => {
       CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS: '21600000',
       CLAUDE_STREAM_IDLE_TIMEOUT_MS: '21600000',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      ENABLE_TOOL_SEARCH: 'false',
       CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768',
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192',
       ANTHROPIC_API_KEY: '',
@@ -221,7 +222,8 @@ describe('environment and settings', () => {
       env: { A: '1' },
     })
     expect(DEFAULT_ALLOW).toEqual(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
-    expect(DEFAULT_DENY).toContain('Task')
+    for (const t of ['Task', 'TodoWrite', 'CronCreate', 'EnterWorktree', 'SendMessage'])
+      expect(DEFAULT_DENY).toContain(t)
     expect(DEFAULT_DENY).not.toContain('ToolSearch')
     writeLaunchSettings(file, { A: '1' }, ['Edit', 'Bash(npm test:*)', 'Edit', 'Read'], ['Task', 'Nope'])
     expect((JSON.parse(readFileSync(file, 'utf8')) as { permissions: unknown }).permissions).toEqual({

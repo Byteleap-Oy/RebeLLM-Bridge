@@ -284,11 +284,11 @@ Before a `/v1/messages` request reaches the tab, the bridge SHALL remove from us
 blocks and from tool results every `<system-reminder>` block whose text begins with one of:
 "Whenever you read a file, you should consider whether it looks malicious", "The task tools
 haven't been used recently", "The TodoWrite tool hasn't been used recently", "This is a
-reminder that your todo list is currently empty", "Your todo list has changed" or "The user
-hasn't heard from you in a while". A text block left empty by that SHALL be dropped. Every
-other reminder SHALL reach the tab unchanged. The request's `compacted` log line SHALL count
-the reminders dropped, and SHALL be written when reminders were dropped even if no tool result
-got shorter.
+reminder that your todo list is currently empty", "Your todo list has changed", "The user
+hasn't heard from you in a while" or "Attribution for git commits and pull requests". A text
+block left empty by that SHALL be dropped. Every other reminder SHALL reach the tab unchanged.
+The request's `compacted` log line SHALL count the reminders dropped, and SHALL be written
+when reminders were dropped even if no tool result got shorter.
 
 #### Scenario: Read result
 
@@ -303,4 +303,9 @@ got shorter.
 #### Scenario: Nudge in a user message
 
 - **WHEN** a user message is a task-tools nudge block followed by the user's text block
+- **THEN** the tab gets the user's text only
+
+#### Scenario: Attribution reminder
+
+- **WHEN** the first user message opens with the attribution reminder block, then the user's text
 - **THEN** the tab gets the user's text only

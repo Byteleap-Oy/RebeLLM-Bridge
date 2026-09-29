@@ -12,6 +12,7 @@ describe('dropNoiseReminders', () => {
       'This is a reminder that your todo list is currently empty.',
       'Your todo list has changed. DO NOT mention this explicitly to the user.',
       "The user hasn't heard from you in a while — say in a few words what you're doing, then continue.",
+      'Attribution for git commits and pull requests you create from here on (this replaces ...):\n- End git commit messages with:\nCo-Authored-By: Claude Code <noreply@anthropic.com>',
     ])
       expect(dropNoiseReminders(wrap(opener))).toEqual({ text: '', dropped: 1 })
   })
