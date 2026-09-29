@@ -1,61 +1,35 @@
 # RebeLLM Bridge
 
-Use the model running in your [RebeLLM](https://rebellm.ai) browser tab from the command
-line, from any OpenAI or Anthropic client, and from Claude Code. The bridge is a small local
-service: the tab connects to it and does the work; the bridge runs no model and holds no
-keys.
+Run [Claude Code](https://docs.claude.com/en/docs/claude-code) on the model in your
+[RebeLLM](https://rebellm.ai) browser tab. The bridge is a small local service: Claude Code
+talks to it as it would to Anthropic, the tab connects to it and does the work; the bridge
+runs no model and holds no keys.
 
 ```
-Claude Code / curl / SDKs ──HTTP──▶ rebellm-bridge (127.0.0.1:7343) ◀──WebSocket── RebeLLM tab
+Claude Code ──HTTP──▶ rebellm-bridge (127.0.0.1:7343) ◀──WebSocket── RebeLLM tab
 ```
 
 ## Getting started
 
-Node 22+ and a RebeLLM tab.
+Node 22+, Claude Code and a RebeLLM tab with its model loaded.
 
-```
-npm install -g rebellm-bridge     # or run it once with: npx rebellm-bridge
-```
-
-(From source: clone this repo, `npm install && npm run build && npm install -g .`.)
-
-1. `rebellm-bridge` — the first start prints a token once and keeps it in
-   `~/.rebellm-bridge/token` (`cat` it to see it again, delete it for a new one).
+1. `npx rebellm-bridge claude` — nothing to install; after `npm install -g rebellm-bridge` it
+   is `rebellm-claude`. It starts the bridge, prints a token on the first run (kept in
+   `~/.rebellm-bridge/token`; `cat` it to see it again) and waits for the tab.
 2. In RebeLLM: Bridge (top of the page) → paste the token, Save, switch on. The sidebar reads
-   "Connected to 127.0.0.1:7343". The model must be loaded in that tab.
-3. Check: `curl http://127.0.0.1:7343/health` → `{"tab":true,"state":"ready",...}`.
+   "Connected to 127.0.0.1:7343".
+3. Claude Code starts on the tab's model. Later runs find the token and the tab by themselves.
 
-## Use it from the command line
+The bridge alone, for the MCP tool or another client: `rebellm-bridge` (or
+`npx rebellm-bridge`), then `curl http://127.0.0.1:7343/health` →
+`{"tab":true,"state":"ready",...}`.
 
-OpenAI-style (streaming recommended — a local model can take minutes for the first token):
+## Claude Code on the tab model
 
-```
-curl -N http://127.0.0.1:7343/v1/chat/completions -H 'Content-Type: application/json' \
-  -d '{"model":"rebellm","stream":true,"messages":[{"role":"user","content":"Capital of Finland, one word."}]}'
-```
-
-Anthropic-style:
+`rebellm-claude` runs Claude Code with its own config directory, your claude.ai login untouched:
 
 ```
-curl -N http://127.0.0.1:7343/v1/messages -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"rebellm","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"Capital of Finland, one word."}]}'
-```
-
-Other routes: `GET /v1/models`, `GET /health`, `POST /v1/messages/count_tokens` (an
-estimate, works without a tab). No API key is checked: the bridge listens on loopback only
-and refuses requests from web pages (`Origin`) and foreign `Host` names. `model` is
-ignored; the tab's model answers. `tools` are forwarded and come back as tool calls for your
-client to run.
-
-SDKs: OpenAI with `base_url="http://127.0.0.1:7343/v1"`, Anthropic with
-`base_url="http://127.0.0.1:7343"`, any `api_key`.
-
-## Claude Code
-
-As Claude Code's model (its own config directory, your claude.ai login untouched):
-
-```
-npx rebellm-bridge claude        # nothing to install; rebellm-claude after npm install -g
+rebellm-claude                   # interactive
 rebellm-claude -p "What is 2 + 3?"
 ```
 
@@ -105,7 +79,9 @@ project's `.claude/settings.json` and your user settings. Managed settings (MDM,
 organisation can change them: the launcher names the file when it finds one, and `/status`
 inside `claude` lists the setting sources in force.
 
-As a tool inside your normal Claude Code (Claude keeps its own model, can ask yours):
+## Claude Code as usual, your model as a tool
+
+Claude keeps its own model and can ask yours through MCP:
 
 ```
 claude mcp add rebellm -- rebellm-bridge --mcp
@@ -113,6 +89,15 @@ claude mcp add rebellm -- rebellm-bridge --mcp
 
 Tools: `chat` (messages, optional `max_tokens`, `temperature`; streams progress) and
 `status`. Raise `MCP_TOOL_TIMEOUT` if Claude Code gives up before a slow answer.
+
+## Other clients
+
+The bridge serves the Anthropic Messages API on loopback: `POST /v1/messages` (streaming
+recommended — a local model can take minutes for the first token), `GET /v1/models`,
+`GET /health`, `POST /v1/messages/count_tokens` (an estimate, works without a tab). No API key
+is checked; it refuses requests from web pages (`Origin`) and foreign `Host` names. `model` is
+ignored; the tab's model answers. `tools` are forwarded and come back as tool calls for your
+client to run. Anthropic SDKs work with `base_url="http://127.0.0.1:7343"` and any `api_key`.
 
 ## Options
 

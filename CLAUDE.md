@@ -1,8 +1,9 @@
 # CLAUDE.md
 
-Project: RebeLLM Bridge, a small local service that lets tools on the user's machine
-(Claude Code through MCP, anything else through an OpenAI-style HTTP endpoint) use the
-model running in the user's RebeLLM browser tab. The tab connects out to this service over
+Project: RebeLLM Bridge, a small local service that lets Claude Code on the user's machine
+(as its model through the Anthropic Messages API, started by `rebellm-claude`, or as an MCP
+tool) use the model running in the user's RebeLLM browser tab. The focus is Claude Code; the
+other endpoints stay but the README does not lead with them. The tab connects out to this service over
 WebSocket; this service never runs a model itself. Public repository, Apache-2.0 with the Commons Clause (free to use and share, not for sale);
 never call it open source.
 

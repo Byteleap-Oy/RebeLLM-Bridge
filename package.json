@@ -1,14 +1,13 @@
 {
   "name": "rebellm-bridge",
   "version": "0.2.5",
-  "description": "Use the model in your RebeLLM browser tab from the command line, OpenAI/Anthropic clients and Claude Code",
+  "description": "Run Claude Code on the model in your RebeLLM browser tab",
   "keywords": [
     "rebellm",
     "llm",
     "bridge",
     "mcp",
     "claude-code",
-    "openai-compatible",
     "anthropic-compatible",
     "webgpu"
   ],
