@@ -187,3 +187,42 @@ with its result count or error, never the query.
 
 - **WHEN** `max_uses` is 1 and the tab calls `web_search` twice in one round
 - **THEN** the second result block holds `error_code: 'max_uses_exceeded'` and the next `chat` offers no `web_search` tool
+
+### Requirement: Compact shell results
+
+For each `tool_result` whose `tool_use` was named `Bash`, `Grep` or `Glob`, the bridge SHALL
+shorten the result's text before it reaches the tab: ANSI escape sequences removed; of a line
+redrawn with carriage returns only the last drawing kept; trailing whitespace on each line
+removed and a run of blank lines collapsed to one; consecutive identical lines collapsed to
+one line marked with the count; and a result of more than 150 lines or 8,000 characters cut
+to its first lines and its last lines with a line between them saying how many lines the
+bridge hid. The same text SHALL shorten to the same result on every request. The results of
+every other tool SHALL reach the tab unchanged. For each `/v1/messages` request in which a
+result was shortened the bridge SHALL write one request log line with the number of results
+shortened and their characters before and after; the line SHALL be absent when nothing was
+shortened and SHALL carry no content.
+
+#### Scenario: Progress bar
+
+- **WHEN** a `Bash` result holds a download whose progress line was redrawn thirty times with carriage returns and colours
+- **THEN** the tab gets the last drawing of that line, without escape codes
+
+#### Scenario: Repeated warnings
+
+- **WHEN** a `Bash` result repeats the same warning line five times in a row
+- **THEN** the tab gets that line once, marked `(×5)`
+
+#### Scenario: Long output
+
+- **WHEN** a `Bash` result has 900 lines
+- **THEN** the tab gets the first 100 and the last 50 with a line between them saying 750 lines were hidden by the bridge, and the request log reads `compacted 1 tool result, <before> chars to <after>`
+
+#### Scenario: Read stays exact
+
+- **WHEN** a `Read` result has 900 lines with trailing spaces
+- **THEN** the tab gets it unchanged and the request log has no `compacted` line
+
+#### Scenario: Same text, same result
+
+- **WHEN** two requests carry the same long `Bash` result
+- **THEN** the tab gets the same shortened text in both

@@ -89,6 +89,14 @@ did not get: content blocks it cannot take (images, documents) by type and count
 `tool_choice`, and server tools other than web search, so you can see whether your tools
 need something the protocol lacks.
 
+Shell output is compacted on its way to the tab: the results of Claude Code's `Bash`, `Grep`
+and `Glob` tools lose their colour codes and redrawn progress lines, blank runs and repeated
+lines collapse (`(×5)`), a line over 1,000 characters is clipped, and a result over 150 lines
+or 8,000 characters keeps its first 100 and last 50 lines with a line saying how many the
+bridge hid. Nothing else is touched (`Read` stays exact, so edits still match), and the same
+output always shrinks the same way, so the tab keeps its prompt cache. The request log shows
+the saving per request (`compacted 2 tool results, 18 204 chars to 4 012`).
+
 On a work machine Claude Code may be pinned to the company's endpoint or cloud provider.
 The launcher blanks `ANTHROPIC_API_KEY`, `ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_USE_*`
 from your shell and passes its own variables with `--settings`, which ranks above the

@@ -1,5 +1,6 @@
 import { request } from 'node:http'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { compactShellOutput } from '../compact.js'
 import type { ChatRequest } from '../protocol.js'
 import { FakeTab } from '../test/fake-tab.js'
 import { TOKEN, bridge } from '../test/harness.js'
@@ -604,6 +605,31 @@ describe('request log', () => {
         .slice(lines.length)
         .filter((l) => l.includes('ignored')),
     ).toEqual([])
+  })
+
+  it('logs the shell output it shortened, never the output', async () => {
+    const b = await bridge()
+    const tab = await b.tab()
+    tab.onChat = (c) => tab.answer(c.id, ['ok'])
+    const output = Array.from({ length: 400 }, (_, i) => `secret line ${i + 1}`).join('\n')
+    const r = await post(b.base, {
+      max_tokens: 9,
+      tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
+      messages: [
+        user('list'),
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls -R' } }] },
+        user([{ type: 'tool_result', tool_use_id: 't1', content: output }]),
+      ],
+    })
+    expect(r.status).toBe(200)
+    const lines = b.requests()
+    const short = compactShellOutput(output).length
+    const group = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+    expect(short).toBeLessThan(output.length / 2)
+    expect(lines[1]).toBe(
+      `chat ${idOf(lines)} /v1/messages: compacted 1 tool result, ${group(output.length)} chars to ${group(short)}`,
+    )
+    expect(b.lines.join('\n')).not.toMatch(/secret/)
   })
 
   it('logs a client that gives up while the tab is still prefilling', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { compactShellOutput, hiddenLine } from '../compact.js'
 import {
   MAX_USES,
   SEARCH_SCHEMA,
@@ -87,6 +88,7 @@ describe('toChatInput', () => {
       stream: true,
       stopSequences: ['END'],
       ignored: { blocks: { image: 1, document: 1 }, serverTools: ['code_execution_20250522'] },
+      compacted: { results: 0, before: 0, after: 0 },
     })
   })
 
@@ -185,6 +187,37 @@ describe('toChatInput', () => {
     })
   })
 
+  it('shortens Bash, Grep and Glob results, never Read, and counts the saving', () => {
+    const long = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join('\n')
+    const clean = 'ok'
+    const r = toChatInput({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'b', name: 'Bash', input: { command: 'ls -R' } },
+            { type: 'tool_use', id: 'g', name: 'Grep', input: { pattern: 'x' } },
+            { type: 'tool_use', id: 'r', name: 'Read', input: { file_path: 'a.ts' } },
+          ],
+        },
+        user([
+          { type: 'tool_result', tool_use_id: 'b', content: `${long}\n` },
+          { type: 'tool_result', tool_use_id: 'g', content: clean },
+          { type: 'tool_result', tool_use_id: 'r', content: `${long}  \n` },
+        ]),
+      ],
+    })
+    if ('error' in r) throw new Error(r.error)
+    const [bash, grep, read] = r.input.messages.slice(1).map((m) => m.content)
+    expect(bash).toBe(compactShellOutput(long))
+    expect(bash).toContain(hiddenLine(150))
+    expect(grep).toBe(clean)
+    expect(read).toBe(`${long}  \n`)
+    expect(r.compacted).toEqual({ results: 1, before: long.length + 1, after: compactShellOutput(long).length })
+    const none = toChatInput({ messages: [user('hi')] })
+    expect(none).toMatchObject({ compacted: { results: 0, before: 0, after: 0 } })
+  })
+
   it('passes a system message inside messages on as a user message in place', () => {
     const r = toChatInput({
       system: [{ type: 'text', text: 'You are Claude Code.' }],
@@ -227,6 +260,7 @@ describe('toChatInput', () => {
       stream: false,
       stopSequences: [],
       ignored: { blocks: {}, serverTools: [] },
+      compacted: { results: 0, before: 0, after: 0 },
     })
   })
 

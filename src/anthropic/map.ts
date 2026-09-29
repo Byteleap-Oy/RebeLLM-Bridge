@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { ChatMessage, StopReason as TabStop, ToolCall, ToolSchema, Usage as TabUsage } from '../protocol.js'
-import type { Ignored } from '../reqlog.js'
+import { compactShellOutput } from '../compact.js'
+import type { Compacted, Ignored } from '../reqlog.js'
 import type { ChatInput } from '../tab.js'
 import type { ApiError, ContentBlock, Message, StopReason, ToolUseBlock, Usage } from './types.js'
 
@@ -19,7 +20,14 @@ export interface SearchTool {
 }
 
 export type ParsedMessages =
-  | { input: ChatInput; stream: boolean; stopSequences: string[]; search?: SearchTool; ignored: Ignored }
+  | {
+      input: ChatInput
+      stream: boolean
+      stopSequences: string[]
+      search?: SearchTool
+      ignored: Ignored
+      compacted: Compacted
+    }
   | { error: string }
 
 export const SEARCH_NAME = 'web_search'
@@ -34,6 +42,15 @@ export const SEARCH_SCHEMA: ToolSchema = {
     description: 'Search the web.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
   },
+}
+
+/** Claude Code's shell tools; their output is shortened. Read stays exact, as Edit needs its text. */
+const COMPACT_TOOLS = new Set(['Bash', 'Grep', 'Glob'])
+
+/** What the mapping collects for the request log beside the messages. */
+interface Collected {
+  ignored: Ignored
+  compacted: Compacted
 }
 
 /** A content block the tab cannot take, as text it can. */
@@ -69,7 +86,7 @@ function toolResult(
   b: Obj,
   path: string,
   names: Map<string, string>,
-  ignored: Ignored,
+  { ignored, compacted }: Collected,
 ): ChatMessage | { error: string } {
   if (!isStr(b.tool_use_id)) return { error: `${path}.tool_use_id must be a string` }
   let text: string | { error: string } = ''
@@ -78,6 +95,15 @@ function toolResult(
   else if (!absent(b.content)) return { error: `${path}.content must be a string or an array of blocks` }
   if (!isStr(text)) return text
   const name = names.get(b.tool_use_id)
+  if (name && COMPACT_TOOLS.has(name)) {
+    const short = compactShellOutput(text)
+    if (short.length < text.length) {
+      compacted.results++
+      compacted.before += text.length
+      compacted.after += short.length
+    }
+    text = short
+  }
   return { role: 'tool', content: b.is_error === true ? `Error: ${text}` : text, ...(name ? { name } : {}) }
 }
 
@@ -86,8 +112,9 @@ function userMessages(
   content: unknown[],
   path: string,
   names: Map<string, string>,
-  ignored: Ignored,
+  collected: Collected,
 ): ChatMessage[] | { error: string } {
+  const { ignored } = collected
   const out: ChatMessage[] = []
   let texts: string[] | null = null
   const flush = () => {
@@ -99,7 +126,7 @@ function userMessages(
     if (!isObj(b) || !isStr(b.type)) return { error: `${at} must be a content block with a type` }
     if (b.type === 'tool_result') {
       flush()
-      const m = toolResult(b, at, names, ignored)
+      const m = toolResult(b, at, names, collected)
       if ('error' in m) return m
       out.push(m)
       continue
@@ -188,6 +215,7 @@ export function toChatInput(body: unknown): ParsedMessages {
   if (!Array.isArray(body.messages) || !body.messages.length) return { error: 'messages must be a non-empty array' }
   const messages: ChatMessage[] = []
   const ignored: Ignored = { blocks: {}, serverTools: [] }
+  const compacted: Compacted = { results: 0, before: 0, after: 0 }
   const system = systemText(body.system, ignored)
   if (!isStr(system)) return system
   if (system) messages.push({ role: 'system', content: system })
@@ -213,7 +241,7 @@ export function toChatInput(body: unknown): ParsedMessages {
     }
     const out =
       m.role === 'user'
-        ? userMessages(m.content, `${path}.content`, names, ignored)
+        ? userMessages(m.content, `${path}.content`, names, { ignored, compacted })
         : assistantMessage(m.content, `${path}.content`, names)
     if ('error' in out) return out
     messages.push(...(Array.isArray(out) ? out : [out]))
@@ -247,7 +275,7 @@ export function toChatInput(body: unknown): ParsedMessages {
       return { error: 'stop_sequences must be an array of strings' }
     stopSequences = body.stop_sequences.filter((s) => s.length > 0)
   }
-  return { input, stream: body.stream === true, stopSequences, ...(search ? { search } : {}), ignored }
+  return { input, stream: body.stream === true, stopSequences, ...(search ? { search } : {}), ignored, compacted }
 }
 
 /** Rough prompt size without a tokenizer: `ceil(chars / 3.5)` over messages, calls and tools. */

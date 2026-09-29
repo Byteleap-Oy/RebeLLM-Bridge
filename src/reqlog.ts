@@ -12,11 +12,20 @@ export interface Ignored {
   serverTools: string[]
 }
 
+/** Shell tool results the bridge shortened on their way to the tab, with their sizes. */
+export interface Compacted {
+  results: number
+  before: number
+  after: number
+}
+
 /** The lifecycle of one chat request as log lines; message content never goes in. */
 export interface RequestLog {
   arrived(tokens: number, tools: number): void
   /** Writes nothing when the tab got everything. */
   ignored(i: Ignored): void
+  /** Writes nothing when no result got shorter. */
+  compacted(c: Compacted): void
   queued(position: number): void
   /** Only the first call writes a line. */
   firstToken(): void
@@ -54,6 +63,10 @@ export function requestLog(log: LogLine | undefined, route: string, id: string, 
         ...i.serverTools.map((t) => `server tool ${t}`),
       ]
       if (parts.length) line(`ignored ${parts.join(', ')}`)
+    },
+    compacted: (c) => {
+      if (c.after < c.before)
+        line(`compacted ${count(c.results, 'tool result')}, ${group(c.before)} chars to ${group(c.after)}`)
     },
     queued: (position) => line(`queued at ${position} ${since()}`),
     firstToken: () => {
