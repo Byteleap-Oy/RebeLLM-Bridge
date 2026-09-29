@@ -226,3 +226,43 @@ shortened and SHALL carry no content.
 
 - **WHEN** two requests carry the same long `Bash` result
 - **THEN** the tab gets the same shortened text in both
+
+### Requirement: Test and git output summarised
+
+Before the generic shortening, a shell tool's result that the bridge recognises by its shape
+SHALL be reduced further. A Vitest, Jest, pytest or cargo test run SHALL keep its failures,
+errors and summary lines and lose its passing entries, replaced by one line with the count of
+passing entries hidden. A `git log` in the default format SHALL become one line per commit
+with the short hash and the subject, preceded by a line with the commit count saying that
+authors, dates and bodies were hidden. A unified diff (`git diff`, `git show`) SHALL keep the
+commit header, file headers, hunk headers and added and removed lines, lose context and index
+lines, and start with a line naming the number of files and the added and removed line counts.
+A `git status` SHALL lose its `(use "git ..." ...)` hint lines, and a section with more than
+20 entries SHALL keep 20 and say how many more there are. Recognition SHALL depend on the
+output alone, never on the command. Output the bridge does not recognise SHALL get only the
+generic shortening.
+
+#### Scenario: Vitest with a failure
+
+- **WHEN** a `Bash` result is a Vitest run of 16 files where one file has 2 failing tests
+- **THEN** the tab gets the failing file's line, the failed-tests section and the summary, with one line saying how many passing entries were hidden, and no `✓` line
+
+#### Scenario: pytest all green
+
+- **WHEN** a `Bash` result is a pytest run whose 42 tests all passed
+- **THEN** the tab gets the session header, the hidden-count line and the final `42 passed` line
+
+#### Scenario: Default git log
+
+- **WHEN** a `Bash` result is `git log` output with 30 commits with bodies
+- **THEN** the tab gets 31 lines: the count line and one `<short hash> <subject>` per commit
+
+#### Scenario: Diff
+
+- **WHEN** a `Bash` result is a `git diff` touching 3 files
+- **THEN** the tab gets a first line naming 3 files with the added and removed counts, then only headers, hunk lines and changed lines
+
+#### Scenario: Oneline log is not a default log
+
+- **WHEN** a `Bash` result is `git log --oneline` output
+- **THEN** the tab gets it with only the generic shortening

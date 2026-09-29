@@ -58,6 +58,25 @@ describe('compactShellOutput', () => {
     expect(compactShellOutput(`${line}\n${line}y\nend`).split('\n')).toHaveLength(3)
   })
 
+  it('summarises a recognised run before the generic steps', () => {
+    const run = [
+      ' RUN  v4.1.11 /x',
+      ...Array.from({ length: 300 }, (_, i) => ` ✓ src/t${i}.test.ts (1 test) 1ms`),
+      ' ❯ src/bad.test.ts (1 test | 1 failed) 2ms',
+      ' Test Files  1 failed | 300 passed (301)',
+    ].join('\n')
+    const out = compactShellOutput(run)
+    expect(out).toBe(
+      [
+        '(300 passing entries hidden by the bridge)',
+        ' RUN  v4.1.11 /x',
+        ' ❯ src/bad.test.ts (1 test | 1 failed) 2ms',
+        ' Test Files  1 failed | 300 passed (301)',
+      ].join('\n'),
+    )
+    expect(out).toBe(compactShellOutput(run))
+  })
+
   it('is deterministic', () => {
     const text = numbered(500).join('\n')
     expect(compactShellOutput(text)).toBe(compactShellOutput(text))

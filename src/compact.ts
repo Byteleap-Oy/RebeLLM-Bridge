@@ -4,6 +4,8 @@
  * prompt prefix only while every earlier message shrinks the same way.
  */
 
+import { summarise } from './shell.js'
+
 export const MAX_LINES = 150
 export const MAX_CHARS = 8_000
 export const HEAD_LINES = 100
@@ -77,5 +79,5 @@ function cut(lines: string[]): string[] {
   return hidden > 0 ? [...lines.slice(0, head), hiddenLine(hidden), ...lines.slice(lines.length - tail)] : lines
 }
 
-/** The text the tab gets for a shell tool's result. */
-export const compactShellOutput = (text: string): string => cut(tidy(text)).join('\n')
+/** The text the tab gets for a shell tool's result: a summary when the shape is known, then the generic steps. */
+export const compactShellOutput = (text: string): string => cut(tidy(summarise(text) ?? text)).join('\n')

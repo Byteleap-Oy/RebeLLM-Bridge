@@ -67,7 +67,10 @@ Shell output is compacted on its way to the tab: the results of Claude Code's `B
 and `Glob` tools lose their colour codes and redrawn progress lines, blank runs and repeated
 lines collapse (`(×5)`), a line over 1,000 characters is clipped, and a result over 150 lines
 or 8,000 characters keeps its first 100 and last 50 lines with a line saying how many the
-bridge hid. Nothing else is touched (`Read` stays exact, so edits still match), and the same
+bridge hid. Output the bridge recognises shrinks further: a Vitest, Jest, pytest or cargo test
+run keeps its failures and summary and says how many passing entries it hid, a default
+`git log` becomes one line per commit, a diff loses its context lines and `git status` its
+hints. Nothing else is touched (`Read` stays exact, so edits still match), and the same
 output always shrinks the same way, so the tab keeps its prompt cache. The request log shows
 the saving per request (`compacted 2 tool results, 18 204 chars to 4 012`).
 
