@@ -89,7 +89,7 @@ describe('toChatInput', () => {
       stream: true,
       stopSequences: ['END'],
       ignored: { blocks: { image: 1, document: 1 }, serverTools: ['code_execution_20250522'] },
-      compacted: { results: 0, before: 0, after: 0 },
+      compacted: { results: 0, before: 0, after: 0, reminders: 0 },
     })
   })
 
@@ -214,9 +214,39 @@ describe('toChatInput', () => {
     expect(bash).toContain(hiddenLine(150))
     expect(grep).toBe(clean)
     expect(read).toBe(`${long}  \n`)
-    expect(r.compacted).toEqual({ results: 1, before: long.length + 1, after: compactShellOutput(long).length })
+    expect(r.compacted).toEqual({
+      results: 1,
+      before: long.length + 1,
+      after: compactShellOutput(long).length,
+      reminders: 0,
+    })
     const none = toChatInput({ messages: [user('hi')] })
-    expect(none).toMatchObject({ compacted: { results: 0, before: 0, after: 0 } })
+    expect(none).toMatchObject({ compacted: { results: 0, before: 0, after: 0, reminders: 0 } })
+  })
+
+  it('drops noise reminders from user blocks and tool results, keeps the others', () => {
+    const note =
+      '<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious.\n</system-reminder>'
+    const nudge = "<system-reminder>\nThe task tools haven't been used recently.\n</system-reminder>"
+    const md = '<system-reminder>\nContents of CLAUDE.md:\nBe brief.\n</system-reminder>'
+    const r = toChatInput({
+      messages: [
+        user([
+          { type: 'text', text: md },
+          { type: 'text', text: 'fix it' },
+        ]),
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'r', name: 'Read', input: { file_path: 'a.ts' } }] },
+        user([
+          { type: 'tool_result', tool_use_id: 'r', content: [{ type: 'text', text: `     1→a\n\n${note}` }] },
+          { type: 'text', text: nudge },
+          { type: 'text', text: 'and then?' },
+        ]),
+        user([{ type: 'text', text: nudge }]),
+      ],
+    })
+    if ('error' in r) throw new Error(r.error)
+    expect(r.input.messages.map((m) => m.content)).toEqual([`${md}\n\nfix it`, '', '     1→a', 'and then?', ''])
+    expect(r.compacted).toEqual({ results: 0, before: 0, after: 0, reminders: 3 })
   })
 
   it('passes a system message inside messages on as a user message in place', () => {
@@ -261,7 +291,7 @@ describe('toChatInput', () => {
       stream: false,
       stopSequences: [],
       ignored: { blocks: {}, serverTools: [] },
-      compacted: { results: 0, before: 0, after: 0 },
+      compacted: { results: 0, before: 0, after: 0, reminders: 0 },
     })
   })
 

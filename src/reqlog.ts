@@ -18,6 +18,8 @@ export interface Compacted {
   results: number
   before: number
   after: number
+  /** Claude Code's noise reminders removed. */
+  reminders: number
 }
 
 /** The lifecycle of one chat request as log lines; message content never goes in. */
@@ -26,7 +28,7 @@ export interface RequestLog {
   arrived(tokens: number, tools: number, parts?: PromptParts): void
   /** Writes nothing when the tab got everything. */
   ignored(i: Ignored): void
-  /** Writes nothing when no result got shorter. */
+  /** Writes nothing when no result got shorter and no reminder went. */
   compacted(c: Compacted): void
   queued(position: number): void
   /** Only the first call writes a line. */
@@ -72,8 +74,13 @@ export function requestLog(log: LogLine | undefined, route: string, id: string, 
       if (parts.length) line(`ignored ${parts.join(', ')}`)
     },
     compacted: (c) => {
-      if (c.after < c.before)
-        line(`compacted ${count(c.results, 'tool result')}, ${group(c.before)} chars to ${group(c.after)}`)
+      const parts = [
+        ...(c.after < c.before
+          ? [`${count(c.results, 'tool result')}, ${group(c.before)} chars to ${group(c.after)}`]
+          : []),
+        ...(c.reminders ? [`${count(c.reminders, 'reminder')} dropped`] : []),
+      ]
+      if (parts.length) line(`compacted ${parts.join(', ')}`)
     },
     queued: (position) => line(`queued at ${position} ${since()}`),
     firstToken: () => {

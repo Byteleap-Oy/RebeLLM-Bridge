@@ -277,3 +277,30 @@ total and the tool count.
 
 - **WHEN** a request carries a 21,000-character system prompt, tools of 14,000 characters and one 19-character user message
 - **THEN** the request log reads `arrived, 10 006 prompt tokens (system 6 000, tools 4 000, messages 6), <n> tools`
+
+### Requirement: Noise reminders dropped
+
+Before a `/v1/messages` request reaches the tab, the bridge SHALL remove from user text
+blocks and from tool results every `<system-reminder>` block whose text begins with one of:
+"Whenever you read a file, you should consider whether it looks malicious", "The task tools
+haven't been used recently", "The TodoWrite tool hasn't been used recently", "This is a
+reminder that your todo list is currently empty", "Your todo list has changed" or "The user
+hasn't heard from you in a while". A text block left empty by that SHALL be dropped. Every
+other reminder SHALL reach the tab unchanged. The request's `compacted` log line SHALL count
+the reminders dropped, and SHALL be written when reminders were dropped even if no tool result
+got shorter.
+
+#### Scenario: Read result
+
+- **WHEN** a `Read` result is the file text followed by the malicious-content reminder
+- **THEN** the tab gets the file text alone, and the request log reads `compacted 1 reminder dropped`
+
+#### Scenario: CLAUDE.md stays
+
+- **WHEN** the first user message holds a reminder with the CLAUDE.md contents and the user's text
+- **THEN** the tab gets both
+
+#### Scenario: Nudge in a user message
+
+- **WHEN** a user message is a task-tools nudge block followed by the user's text block
+- **THEN** the tab gets the user's text only

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { ChatMessage, StopReason as TabStop, ToolCall, ToolSchema, Usage as TabUsage } from '../protocol.js'
 import { compactShellOutput } from '../compact.js'
+import { dropNoiseReminders } from '../reminders.js'
 import type { Compacted, Ignored } from '../reqlog.js'
 import type { ChatInput } from '../tab.js'
 import type { ApiError, ContentBlock, Message, StopReason, ToolUseBlock, Usage } from './types.js'
@@ -94,6 +95,9 @@ function toolResult(
   else if (Array.isArray(b.content)) text = blocksText(b.content, `${path}.content`, ignored)
   else if (!absent(b.content)) return { error: `${path}.content must be a string or an array of blocks` }
   if (!isStr(text)) return text
+  const cleaned = dropNoiseReminders(text)
+  compacted.reminders += cleaned.dropped
+  text = cleaned.text
   const name = names.get(b.tool_use_id)
   if (name && COMPACT_TOOLS.has(name)) {
     const short = compactShellOutput(text)
@@ -114,7 +118,7 @@ function userMessages(
   names: Map<string, string>,
   collected: Collected,
 ): ChatMessage[] | { error: string } {
-  const { ignored } = collected
+  const { ignored, compacted } = collected
   const out: ChatMessage[] = []
   let texts: string[] | null = null
   const flush = () => {
@@ -133,7 +137,11 @@ function userMessages(
     }
     const text = blockText(b, at, ignored)
     if (!isStr(text)) return text
-    ;(texts ??= []).push(text)
+    const cleaned = b.type === 'text' ? dropNoiseReminders(text) : { text, dropped: 0 }
+    compacted.reminders += cleaned.dropped
+    // A block that was only a nudge is not an empty message.
+    if (cleaned.dropped && !cleaned.text) continue
+    ;(texts ??= []).push(cleaned.text)
   }
   flush()
   return out.length ? out : [{ role: 'user', content: '' }]
@@ -215,7 +223,7 @@ export function toChatInput(body: unknown): ParsedMessages {
   if (!Array.isArray(body.messages) || !body.messages.length) return { error: 'messages must be a non-empty array' }
   const messages: ChatMessage[] = []
   const ignored: Ignored = { blocks: {}, serverTools: [] }
-  const compacted: Compacted = { results: 0, before: 0, after: 0 }
+  const compacted: Compacted = { results: 0, before: 0, after: 0, reminders: 0 }
   const system = systemText(body.system, ignored)
   if (!isStr(system)) return system
   if (system) messages.push({ role: 'system', content: system })

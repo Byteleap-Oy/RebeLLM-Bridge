@@ -75,12 +75,14 @@ describe('requestLog', () => {
 
   it('names the shell results it shortened, or nothing', () => {
     const { lines, log } = setup()
-    log.compacted({ results: 2, before: 18204, after: 4012 })
-    log.compacted({ results: 1, before: 500, after: 499 })
-    log.compacted({ results: 0, before: 0, after: 0 })
+    log.compacted({ results: 2, before: 18204, after: 4012, reminders: 0 })
+    log.compacted({ results: 1, before: 500, after: 499, reminders: 3 })
+    log.compacted({ results: 0, before: 0, after: 0, reminders: 1 })
+    log.compacted({ results: 0, before: 0, after: 0, reminders: 0 })
     expect(lines).toEqual([
       'chat msg_ab12 /v1/messages: compacted 2 tool results, 18 204 chars to 4 012',
-      'chat msg_ab12 /v1/messages: compacted 1 tool result, 500 chars to 499',
+      'chat msg_ab12 /v1/messages: compacted 1 tool result, 500 chars to 499, 3 reminders dropped',
+      'chat msg_ab12 /v1/messages: compacted 1 reminder dropped',
     ])
   })
 
