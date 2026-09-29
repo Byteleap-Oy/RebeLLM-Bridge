@@ -8,7 +8,8 @@ TBD - created by archiving change anthropic-messages. Update Purpose after archi
 ### Requirement: Launch Claude Code on the tab model
 
 `rebellm-claude` SHALL run `claude` with inherited stdio, pass through all arguments it
-does not own (`--claude <path>`, `--shared-config`, `--port <n>`, `--allow <rule>`), return
+does not own (`--claude <path>`, `--shared-config`, `--port <n>`, `--allow <rule>`,
+`--keep <tool>`, `--full-prompt`), return
 `claude`'s exit code, and give the child an environment that sends every model request to
 the bridge: `ANTHROPIC_BASE_URL` pointing at the bridge, a dummy `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL` set,
@@ -32,12 +33,12 @@ either.
 #### Scenario: Arguments pass through
 
 - **WHEN** the user runs `rebellm-claude -p "What is 2 + 3?"`
-- **THEN** `claude` is started with `--settings <file>`, `-p` and `What is 2 + 3?` and the bridge environment
+- **THEN** `claude` is started with `--settings <file>`, `--system-prompt-file <file>`, `-p` and `What is 2 + 3?` and the bridge environment
 
 #### Scenario: Allow rules are the launcher's
 
 - **WHEN** the user runs `rebellm-claude --allow Edit -p "Fix the typo"`
-- **THEN** `claude` is started with `--settings <file>`, `-p` and `Fix the typo`, and `--allow Edit` is not among its arguments
+- **THEN** `claude` is started with `--settings <file>`, `--system-prompt-file <file>`, `-p` and `Fix the typo`, and `--allow Edit` is not among its arguments
 
 #### Scenario: Exit code
 
@@ -186,19 +187,29 @@ The `--settings` file the launcher writes SHALL allow Claude Code's read-only to
 (`permissions.allow` holding all five), so none waits on auto mode's classifier, which the
 tab model cannot answer in time, nor prompts in the other modes. Each `--allow <rule>` given
 to the launcher SHALL add that Claude Code permission rule after them, once, in the order
-given; the launcher SHALL add nothing else, so `Bash`, `Edit` and `Write` are allowed only
-when the user asks. It SHALL also set `skipWebFetchPreflight` to true, so a fetch does not
-fail when Claude Code's hostname check at `api.anthropic.com` cannot answer.
+given; the launcher SHALL allow nothing else, so `Bash`, `Edit` and `Write` are allowed only
+when the user asks. The file SHALL deny, by bare name so that Claude Code sends no schema for
+them, the tools a small local model does no good with: `Task`, `Agent`, `TodoWrite`,
+`TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, `TaskStop`, `NotebookEdit`,
+`AskUserQuestion`, `Skill`, `SlashCommand`, `EnterPlanMode`, `ExitPlanMode`, `KillShell`,
+`BashOutput` and `TaskOutput`; each `--keep <tool>` SHALL take that name out of the list. It
+SHALL also set `skipWebFetchPreflight` to true, so a fetch does not fail when Claude Code's
+hostname check at `api.anthropic.com` cannot answer.
 
 #### Scenario: Settings file
 
-- **WHEN** the launcher writes its settings file with no `--allow`
-- **THEN** the file's `permissions.allow` is exactly `["Read", "Glob", "Grep", "WebFetch", "WebSearch"]` and `skipWebFetchPreflight` is true
+- **WHEN** the launcher writes its settings file with no `--allow` and no `--keep`
+- **THEN** the file's `permissions.allow` is exactly `["Read", "Glob", "Grep", "WebFetch", "WebSearch"]`, its `permissions.deny` is the list above, and `skipWebFetchPreflight` is true
 
 #### Scenario: User rules
 
 - **WHEN** the launcher runs with `--allow Edit --allow 'Bash(npm test:*)' --allow Edit`
 - **THEN** the file's `permissions.allow` is the five defaults followed by `Edit` and `Bash(npm test:*)`
+
+#### Scenario: Kept tool
+
+- **WHEN** the launcher runs with `--keep Task`
+- **THEN** `Task` is not in `permissions.deny` and the rest of the list is
 
 #### Scenario: Fetch in auto mode
 
@@ -214,3 +225,28 @@ fail when Claude Code's hostname check at `api.anthropic.com` cannot answer.
 
 - **WHEN** the launcher runs with no `--allow` and Claude asks to edit a file in auto mode
 - **THEN** Claude Code decides as it would without the launcher; the settings file allows no `Edit`
+
+### Requirement: Short system prompt
+
+The launcher SHALL write a system prompt written for a small local model, under 600 words,
+to `~/.rebellm-bridge/claude-system-prompt.md` at each launch and start `claude` with
+`--system-prompt-file` naming it, placed after `--settings` and before the user's arguments.
+The prompt SHALL name the tools and their use (read before edit, exact edits, small commands,
+no background work), tell the model to follow CLAUDE.md files and reminders, and to keep
+answers short. The launcher SHALL NOT pass the file when `--full-prompt` is given or when the
+user's arguments hold `--system-prompt` or `--system-prompt-file`.
+
+#### Scenario: Default
+
+- **WHEN** the user runs `rebellm-claude`
+- **THEN** `claude` gets `--system-prompt-file ~/.rebellm-bridge/claude-system-prompt.md` and that file holds the launcher's prompt
+
+#### Scenario: Full prompt
+
+- **WHEN** the user runs `rebellm-claude --full-prompt`
+- **THEN** `claude` gets no `--system-prompt-file`
+
+#### Scenario: User's own prompt
+
+- **WHEN** the user runs `rebellm-claude --system-prompt "You are terse."`
+- **THEN** `claude` gets the user's `--system-prompt` and no `--system-prompt-file`

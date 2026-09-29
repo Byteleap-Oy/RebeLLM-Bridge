@@ -15,10 +15,11 @@ import type { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import spawn from 'cross-spawn'
 import { TOKEN_ENV, VERSION, bridgeHealth, keepToken, resolveToken, tokenFile, type TokenChoice } from './cli.js'
+import { SYSTEM_PROMPT } from './prompt.js'
 import { DEFAULT_PORT, startServer, type BridgeServer } from './server.js'
 import type { Health } from './tab.js'
 
-export const USAGE = `Usage: rebellm-claude [--claude <path>] [--shared-config] [--port <n>] [--allow <rule>]... [claude arguments]
+export const USAGE = `Usage: rebellm-claude [--claude <path>] [--shared-config] [--port <n>] [--allow <rule>]... [--keep <tool>]... [--full-prompt] [claude arguments]
 
 Runs Claude Code on the model in your RebeLLM tab, through rebellm-bridge.
 
@@ -27,6 +28,10 @@ Runs Claude Code on the model in your RebeLLM tab, through rebellm-bridge.
   --port <n>        the bridge's port (default ${DEFAULT_PORT}); a bridge already there is reused
   --allow <rule>    a Claude Code permission rule to allow as well, e.g. Edit or 'Bash(npm test:*)';
                     repeat for more (the launcher allows Read, Glob, Grep, WebFetch and WebSearch)
+  --keep <tool>     offer the model a tool the launcher leaves out to save context, e.g. Task;
+                    repeat for more (left out: sub-agents, task lists, notebooks, questions,
+                    skills, plan mode, background shells)
+  --full-prompt     Claude Code's own system prompt instead of the launcher's short one
 
 Everything else, and everything after --, goes to claude.`
 
@@ -48,13 +53,24 @@ export interface LauncherOptions {
   port: number
   /** Permission rules to allow beside the launcher's own, in order. */
   allow: string[]
+  /** Tools to take out of the launcher's deny list. */
+  keep: string[]
+  /** Claude Code's own system prompt instead of the launcher's. */
+  fullPrompt: boolean
   /** For claude, in order. */
   args: string[]
 }
 
 /** Takes the launcher's own flags out of `argv`; everything else passes to claude. */
 export function parseLauncher(argv: string[]): LauncherOptions | { error: string } {
-  const o: LauncherOptions = { sharedConfig: false, port: DEFAULT_PORT, allow: [], args: [] }
+  const o: LauncherOptions = {
+    sharedConfig: false,
+    port: DEFAULT_PORT,
+    allow: [],
+    keep: [],
+    fullPrompt: false,
+    args: [],
+  }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === '--') {
@@ -65,11 +81,14 @@ export function parseLauncher(argv: string[]): LauncherOptions | { error: string
     const flag = eq > 0 ? arg.slice(0, eq) : arg
     if (flag === '--shared-config' && eq < 0) {
       o.sharedConfig = true
-    } else if (flag === '--claude' || flag === '--port' || flag === '--allow') {
+    } else if (flag === '--full-prompt' && eq < 0) {
+      o.fullPrompt = true
+    } else if (flag === '--claude' || flag === '--port' || flag === '--allow' || flag === '--keep') {
       const value = eq > 0 ? arg.slice(eq + 1) : argv[++i]
       if (!value?.trim()) return { error: `${flag} needs a value` }
       if (flag === '--claude') o.claude = value
       else if (flag === '--allow') o.allow.push(value.trim())
+      else if (flag === '--keep') o.keep.push(value.trim())
       else {
         const port = Number(value)
         if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -172,6 +191,21 @@ export const logFile = (home: string) => join(home, '.rebellm-bridge', 'bridge.l
 /** Given to claude as `--settings`, which ranks above project, local and user settings; one per port, as the bridge URL differs. */
 export const launchSettingsFile = (home: string, port: number) =>
   join(home, '.rebellm-bridge', `claude-settings-${port}.json`)
+/** Given to claude as `--system-prompt-file`; rewritten at each launch, so it follows the package. */
+export const launchPromptFile = (home: string) => join(home, '.rebellm-bridge', 'claude-system-prompt.md')
+
+const OWN_PROMPT = /^--system-prompt(-file)?(=|$)/
+
+/** The launcher's prompt file, or null when the user keeps Claude Code's own or passes a prompt. */
+export function promptArgs(o: Pick<LauncherOptions, 'fullPrompt' | 'args'>, file: string): string[] {
+  return o.fullPrompt || o.args.some((a) => OWN_PROMPT.test(a)) ? [] : ['--system-prompt-file', file]
+}
+
+/** Writes the short prompt where `--system-prompt-file` will find it. */
+export function writeLaunchPrompt(file: string): void {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, SYSTEM_PROMPT, { mode: 0o600 })
+}
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -189,12 +223,43 @@ export const QUIET_SETTINGS = {
  */
 export const DEFAULT_ALLOW = ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'] as const
 
+/**
+ * Denied by bare name, which keeps their schemas out of every request: tools a small local
+ * model does no good with. ToolSearch stays, as deferred MCP tools need it under --shared-config.
+ */
+export const DEFAULT_DENY = [
+  'Task',
+  'Agent',
+  'TodoWrite',
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
+  'TaskStop',
+  'NotebookEdit',
+  'AskUserQuestion',
+  'Skill',
+  'SlashCommand',
+  'EnterPlanMode',
+  'ExitPlanMode',
+  'KillShell',
+  'BashOutput',
+  'TaskOutput',
+] as const
+
 /** WebFetch fails whenever its hostname check at api.anthropic.com cannot answer. */
 export const SKIP_FETCH_PREFLIGHT = { skipWebFetchPreflight: true } as const
 
-/** `allow` holds the user's rules; they follow the defaults, once each. */
-export function writeLaunchSettings(file: string, env: Record<string, string>, allow: string[] = []): void {
-  const permissions = { allow: [...new Set([...DEFAULT_ALLOW, ...allow])] }
+/** `allow` holds the user's rules; they follow the defaults, once each. `keep` takes tools out of the deny list. */
+export function writeLaunchSettings(
+  file: string,
+  env: Record<string, string>,
+  allow: string[] = [],
+  keep: string[] = [],
+): void {
+  const kept = new Set(keep)
+  const deny = DEFAULT_DENY.filter((t) => !kept.has(t))
+  const permissions = { allow: [...new Set([...DEFAULT_ALLOW, ...allow])], ...(deny.length ? { deny } : {}) }
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   writeFileSync(
     file,
@@ -328,7 +393,9 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
     const dir = o.sharedConfig ? null : configDir(home)
     const ours = bridgeEnv(base, health.contextTokens)
     const settings = launchSettingsFile(home, Number(new URL(base).port))
-    writeLaunchSettings(settings, ours, o.allow)
+    writeLaunchSettings(settings, ours, o.allow, o.keep)
+    const prompt = promptArgs(o, launchPromptFile(home))
+    if (prompt.length) writeLaunchPrompt(launchPromptFile(home))
     const managed = io.managedFile ?? managedSettingsFile(platform, io.env)
     const overrides = managedOverrides(managed)
     if (overrides.length)
@@ -339,7 +406,7 @@ export async function launch(argv: string[], io: LaunchIo): Promise<number> {
     say(`starting ${claude} with ${dir ? `the config in ${dir}` : 'your own Claude Code config'}`)
     const env = childEnv(io.env, { ...ours, ...(dir ? { CLAUDE_CONFIG_DIR: dir } : {}) }, platform)
     // Ours first: a --settings the user passes comes later and wins, as asked.
-    const child = spawn(claude, ['--settings', settings, ...o.args], { stdio: 'inherit', env })
+    const child = spawn(claude, ['--settings', settings, ...prompt, ...o.args], { stdio: 'inherit', env })
     // A supervisor or IDE stopping the launcher stops claude too, instead of orphaning it.
     const forward = (signal: NodeJS.Signals) => void child.kill(signal)
     for (const sig of FORWARDED) process.on(sig, forward)

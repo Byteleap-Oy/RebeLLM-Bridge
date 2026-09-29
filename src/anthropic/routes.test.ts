@@ -443,7 +443,7 @@ describe('web search', () => {
     ])
     const id = msg.id
     expect(b.requests()).toEqual([
-      `chat ${id} /v1/messages: arrived, 32 prompt tokens, 1 tool`,
+      expect.stringMatching(/\/v1\/messages: arrived, 32 prompt tokens \(system 0, tools \d+, messages \d+\), 1 tool$/),
       `chat ${id} /v1/messages: first token +Ns`,
       `chat ${id} /v1/messages: search 1 result +Ns`,
       `chat ${id} /v1/messages: done end_turn, 3 tokens, +Ns`,
@@ -562,7 +562,7 @@ describe('request log', () => {
     const id = all[0].message.id
     // 19 + 'Read' + '{"type":"object"}' = 40 chars
     expect(b.requests()).toEqual([
-      `chat ${id} /v1/messages: arrived, 12 prompt tokens, 1 tool`,
+      `chat ${id} /v1/messages: arrived, 12 prompt tokens (system 0, tools 6, messages 6), 1 tool`,
       `chat ${id} /v1/messages: queued at 2 +Ns`,
       `chat ${id} /v1/messages: first token +Ns`,
       `chat ${id} /v1/messages: done end_turn, 2 tokens, +Ns`,
@@ -649,7 +649,7 @@ describe('request log', () => {
     await vi.waitFor(() => expect(b.requests()).toHaveLength(3))
     const id = idOf(b.requests())
     expect(b.requests()).toEqual([
-      `chat ${id} /v1/messages: arrived, 3 prompt tokens, 0 tools`,
+      `chat ${id} /v1/messages: arrived, 3 prompt tokens (system 0, tools 0, messages 3), 0 tools`,
       `chat ${id} /v1/messages: queued at 1 +Ns`,
       `chat ${id} /v1/messages: client aborted +Ns`,
     ])
@@ -665,9 +665,9 @@ describe('request log', () => {
     const [first, second] = [idOf(lines), idOf(lines.slice(2))]
     expect(first).not.toBe(second)
     expect(lines).toEqual([
-      `chat ${first} /v1/messages: arrived, 1 prompt token, 0 tools`,
+      `chat ${first} /v1/messages: arrived, 1 prompt token (system 0, tools 0, messages 1), 0 tools`,
       `chat ${first} /v1/messages: refused 503 no RebeLLM tab connected +Ns`,
-      `chat ${second} /v1/messages: arrived, 1 prompt token, 0 tools`,
+      `chat ${second} /v1/messages: arrived, 1 prompt token (system 0, tools 0, messages 1), 0 tools`,
       `chat ${second} /v1/messages: refused 503 model loading +Ns`,
     ])
   })

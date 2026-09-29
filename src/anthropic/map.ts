@@ -278,16 +278,39 @@ export function toChatInput(body: unknown): ParsedMessages {
   return { input, stream: body.stream === true, stopSequences, ...(search ? { search } : {}), ignored, compacted }
 }
 
-/** Rough prompt size without a tokenizer: `ceil(chars / 3.5)` over messages, calls and tools. */
-export function estimateTokens(input: ChatInput): number {
-  let chars = 0
+/** Where a prompt's tokens go: the system prompt, the tool definitions, the messages. */
+export interface PromptParts {
+  system: number
+  tools: number
+  messages: number
+}
+
+const CHARS_PER_TOKEN = 3.5
+
+function promptChars(input: ChatInput): PromptParts {
+  const parts = { system: 0, tools: 0, messages: 0 }
   for (const m of input.messages) {
-    chars += m.content.length + (m.name?.length ?? 0)
-    for (const c of m.tool_calls ?? []) chars += c.function.name.length + JSON.stringify(c.function.arguments).length
+    const part = m.role === 'system' ? 'system' : 'messages'
+    parts[part] += m.content.length + (m.name?.length ?? 0)
+    for (const c of m.tool_calls ?? [])
+      parts[part] += c.function.name.length + JSON.stringify(c.function.arguments).length
   }
   for (const { function: f } of input.tools ?? [])
-    chars += f.name.length + f.description.length + JSON.stringify(f.parameters).length
-  return Math.ceil(chars / 3.5)
+    parts.tools += f.name.length + f.description.length + JSON.stringify(f.parameters).length
+  return parts
+}
+
+/** Rough prompt size without a tokenizer: `ceil(chars / 3.5)` over messages, calls and tools. */
+export function estimateTokens(input: ChatInput): number {
+  const c = promptChars(input)
+  return Math.ceil((c.system + c.tools + c.messages) / CHARS_PER_TOKEN)
+}
+
+/** The same estimate split by part, each rounded up on its own. */
+export function estimateParts(input: ChatInput): PromptParts {
+  const c = promptChars(input)
+  const t = (n: number) => Math.ceil(n / CHARS_PER_TOKEN)
+  return { system: t(c.system), tools: t(c.tools), messages: t(c.messages) }
 }
 
 /** The wording Claude Code reacts to by compacting the conversation. */

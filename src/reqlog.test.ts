@@ -65,6 +65,14 @@ describe('requestLog', () => {
     ])
   })
 
+  it('splits the estimate by part when given one', () => {
+    const { lines, log } = setup()
+    log.arrived(10006, 18, { system: 6000, tools: 4000, messages: 6 })
+    expect(lines).toEqual([
+      'chat msg_ab12 /v1/messages: arrived, 10 006 prompt tokens (system 6 000, tools 4 000, messages 6), 18 tools',
+    ])
+  })
+
   it('names the shell results it shortened, or nothing', () => {
     const { lines, log } = setup()
     log.compacted({ results: 2, before: 18204, after: 4012 })

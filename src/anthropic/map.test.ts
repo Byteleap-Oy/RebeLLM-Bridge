@@ -4,6 +4,7 @@ import {
   MAX_USES,
   SEARCH_SCHEMA,
   content,
+  estimateParts,
   estimateTokens,
   message,
   stopReason,
@@ -295,6 +296,30 @@ describe('toChatInput', () => {
       [{ messages: [user('x')], stop_sequences: 'END' }, 'stop_sequences'],
     ]
     for (const [body, part] of bad) expect((toChatInput(body) as { error: string }).error).toContain(part)
+  })
+})
+
+describe('estimateParts', () => {
+  it('splits the same characters into system, tools and messages', () => {
+    const input = {
+      messages: [
+        { role: 'system' as const, content: 'x'.repeat(21_000) },
+        { role: 'user' as const, content: 'Capital of Finland?' },
+        {
+          role: 'assistant' as const,
+          content: '',
+          tool_calls: [{ id: 'c', function: { name: 'Read', arguments: { file_path: 'a.ts' } } }],
+        },
+      ],
+      tools: [
+        {
+          type: 'function' as const,
+          function: { name: 'Read', description: 'r'.repeat(13_979), parameters: { type: 'object' } },
+        },
+      ],
+    }
+    expect(estimateParts(input)).toEqual({ system: 6000, tools: 4000, messages: 13 })
+    expect(estimateTokens(input)).toBe(10013)
   })
 })
 

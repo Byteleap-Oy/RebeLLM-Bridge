@@ -7,6 +7,7 @@ import { SearchError, duckDuckGo, resultsText, type WebSearch } from '../websear
 import {
   SEARCH_NAME,
   content,
+  estimateParts,
   estimateTokens,
   message,
   newId,
@@ -249,7 +250,7 @@ export function messagesRoutes(tab: TabLink, o: MessagesOptions) {
     const id = `msg_${newId()}`
     const estimate = estimateTokens(parsed.input)
     const rlog = requestLog(o.log, '/v1/messages', id)
-    rlog.arrived(estimate, parsed.input.tools?.length ?? 0)
+    rlog.arrived(estimate, parsed.input.tools?.length ?? 0, estimateParts(parsed.input))
     rlog.ignored(parsed.ignored)
     rlog.compacted(parsed.compacted)
     const refuse = (status: number, type: ErrorType, message: string) => {

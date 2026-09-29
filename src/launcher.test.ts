@@ -8,6 +8,7 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import { tokenFile } from './cli.js'
 import {
   DEFAULT_ALLOW,
+  DEFAULT_DENY,
   MISSING,
   QUIET_SETTINGS,
   bridgeEnv,
@@ -15,13 +16,16 @@ import {
   configDir,
   findCommand,
   launch,
+  launchPromptFile,
   launchSettingsFile,
+  promptArgs,
   logFile,
   managedOverrides,
   managedSettingsFile,
   parseLauncher,
   writeLaunchSettings,
 } from './launcher.js'
+import { SYSTEM_PROMPT } from './prompt.js'
 import { FakeTab } from './test/fake-tab.js'
 import { bridge } from './test/harness.js'
 
@@ -90,29 +94,42 @@ async function until(ok: () => boolean) {
 
 describe('parseLauncher', () => {
   it('takes its own flags anywhere and passes the rest in order', () => {
-    expect(parseLauncher([])).toEqual({ sharedConfig: false, port: 7343, allow: [], args: [] })
+    const base = { sharedConfig: false, port: 7343, allow: [], keep: [], fullPrompt: false }
+    expect(parseLauncher([])).toEqual({ ...base, args: [] })
     expect(
       parseLauncher(['-p', 'What is 2 + 3?', '--port', '8000', '--claude=/opt/claude', '--shared-config', '--verbose']),
     ).toEqual({
+      ...base,
       claude: '/opt/claude',
       sharedConfig: true,
       port: 8000,
-      allow: [],
       args: ['-p', 'What is 2 + 3?', '--verbose'],
     })
-    expect(parseLauncher(['--port=0', '--', '--port', '3'])).toEqual({
-      sharedConfig: false,
-      port: 0,
-      allow: [],
-      args: ['--port', '3'],
-    })
+    expect(parseLauncher(['--port=0', '--', '--port', '3'])).toEqual({ ...base, port: 0, args: ['--port', '3'] })
     // One rule per flag: a specifier may hold commas.
     expect(parseLauncher(['--allow', 'Edit', '--allow=Bash(echo a, b)', '-p', 'x', '--', '--allow', 'Write'])).toEqual({
-      sharedConfig: false,
-      port: 7343,
+      ...base,
       allow: ['Edit', 'Bash(echo a, b)'],
       args: ['-p', 'x', '--allow', 'Write'],
     })
+    expect(parseLauncher(['--keep', 'Task', '--keep=Skill', '--full-prompt', '-p', 'x'])).toEqual({
+      ...base,
+      keep: ['Task', 'Skill'],
+      fullPrompt: true,
+      args: ['-p', 'x'],
+    })
+  })
+
+  it('passes its own prompt file unless told not to or the user brings a prompt', () => {
+    const file = '/h/.rebellm-bridge/claude-system-prompt.md'
+    expect(promptArgs({ fullPrompt: false, args: ['-p', 'x'] }, file)).toEqual(['--system-prompt-file', file])
+    expect(promptArgs({ fullPrompt: true, args: [] }, file)).toEqual([])
+    expect(promptArgs({ fullPrompt: false, args: ['--system-prompt', 'terse'] }, file)).toEqual([])
+    expect(promptArgs({ fullPrompt: false, args: ['--system-prompt-file=mine.md'] }, file)).toEqual([])
+    expect(promptArgs({ fullPrompt: false, args: ['--append-system-prompt', 'more'] }, file)).toEqual([
+      '--system-prompt-file',
+      file,
+    ])
   })
 
   it('rejects flags without a usable value', () => {
@@ -122,6 +139,7 @@ describe('parseLauncher', () => {
     expect(parseLauncher(['--port', 'x'])).toEqual({ error: '--port x is not a port number' })
     expect(parseLauncher(['--allow', ''])).toEqual({ error: '--allow needs a value' })
     expect(parseLauncher(['--allow'])).toEqual({ error: '--allow needs a value' })
+    expect(parseLauncher(['--keep', ''])).toEqual({ error: '--keep needs a value' })
   })
 })
 
@@ -199,13 +217,20 @@ describe('environment and settings', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
       skipWebFetchPreflight: true,
-      permissions: { allow: [...DEFAULT_ALLOW] },
+      permissions: { allow: [...DEFAULT_ALLOW], deny: [...DEFAULT_DENY] },
       env: { A: '1' },
     })
     expect(DEFAULT_ALLOW).toEqual(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
-    writeLaunchSettings(file, { A: '1' }, ['Edit', 'Bash(npm test:*)', 'Edit', 'Read'])
+    expect(DEFAULT_DENY).toContain('Task')
+    expect(DEFAULT_DENY).not.toContain('ToolSearch')
+    writeLaunchSettings(file, { A: '1' }, ['Edit', 'Bash(npm test:*)', 'Edit', 'Read'], ['Task', 'Nope'])
     expect((JSON.parse(readFileSync(file, 'utf8')) as { permissions: unknown }).permissions).toEqual({
       allow: [...DEFAULT_ALLOW, 'Edit', 'Bash(npm test:*)'],
+      deny: DEFAULT_DENY.filter((t) => t !== 'Task'),
+    })
+    writeLaunchSettings(file, {}, [], [...DEFAULT_DENY])
+    expect((JSON.parse(readFileSync(file, 'utf8')) as { permissions: unknown }).permissions).toEqual({
+      allow: [...DEFAULT_ALLOW],
     })
     expect(QUIET_SETTINGS).toEqual({
       awaySummaryEnabled: false,
@@ -262,10 +287,13 @@ describe('launch', () => {
     expect(seen.args).toEqual([
       '--settings',
       launchSettingsFile(home, b.server.port),
+      '--system-prompt-file',
+      launchPromptFile(home),
       '-p',
       'What is 2 + 3?',
       'say "hi" & exit',
     ])
+    expect(readFileSync(launchPromptFile(home), 'utf8')).toBe(SYSTEM_PROMPT)
     expect(seen.env).toEqual({ ...bridgeEnv(b.base, 32768), CLAUDE_CONFIG_DIR: configDir(home) })
     expect(seen.health).toMatchObject({ tab: true, model: 'qwen' })
     expect(err.text()).toContain(`using the bridge already running on ${b.base}`)
@@ -276,7 +304,7 @@ describe('launch', () => {
     expect(JSON.parse(readFileSync(launchSettingsFile(home, b.server.port), 'utf8'))).toEqual({
       ...QUIET_SETTINGS,
       skipWebFetchPreflight: true,
-      permissions: { allow: [...DEFAULT_ALLOW, 'Edit'] },
+      permissions: { allow: [...DEFAULT_ALLOW, 'Edit'], deny: [...DEFAULT_DENY] },
       env: bridgeEnv(b.base, 32768),
     })
     expect((await fetch(`${b.base}/health`)).status).toBe(200)
@@ -311,7 +339,12 @@ describe('launch', () => {
     expect(await running).toBe(0)
     const seen = JSON.parse(readFileSync(stub.out, 'utf8')) as Seen
     expect(seen.health).toMatchObject({ tab: true })
-    expect(seen.args).toEqual(['--settings', launchSettingsFile(home, Number(new URL(base!).port))])
+    expect(seen.args).toEqual([
+      '--settings',
+      launchSettingsFile(home, Number(new URL(base!).port)),
+      '--system-prompt-file',
+      launchPromptFile(home),
+    ])
     expect(seen.env.CLAUDE_CONFIG_DIR).toBe('mine')
     expect(existsSync(configDir(home))).toBe(false)
     expect(err.text()).not.toContain('rank above')

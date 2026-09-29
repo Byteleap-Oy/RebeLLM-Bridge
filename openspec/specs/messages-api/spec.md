@@ -266,3 +266,14 @@ generic shortening.
 
 - **WHEN** a `Bash` result is `git log --oneline` output
 - **THEN** the tab gets it with only the generic shortening
+
+### Requirement: Prompt breakdown logged
+
+The arrival line of a `/v1/messages` request SHALL split its prompt estimate into the tokens
+of the system prompt, of the tool definitions and of the messages, in that order, beside the
+total and the tool count.
+
+#### Scenario: Claude Code's first request
+
+- **WHEN** a request carries a 21,000-character system prompt, tools of 14,000 characters and one 19-character user message
+- **THEN** the request log reads `arrived, 10 006 prompt tokens (system 6 000, tools 4 000, messages 6), <n> tools`

@@ -1,3 +1,4 @@
+import type { PromptParts } from './anthropic/map.js'
 import { ChatError } from './tab.js'
 
 export type LogLine = (line: string) => void
@@ -21,7 +22,8 @@ export interface Compacted {
 
 /** The lifecycle of one chat request as log lines; message content never goes in. */
 export interface RequestLog {
-  arrived(tokens: number, tools: number): void
+  /** With `parts`, the line shows where the estimate goes. */
+  arrived(tokens: number, tools: number, parts?: PromptParts): void
   /** Writes nothing when the tab got everything. */
   ignored(i: Ignored): void
   /** Writes nothing when no result got shorter. */
@@ -55,7 +57,12 @@ export function requestLog(log: LogLine | undefined, route: string, id: string, 
   const since = () => `+${((now() - start) / 1000).toFixed(1)}s`
   let first = false
   return {
-    arrived: (tokens, tools) => line(`arrived, ${count(tokens, 'prompt token')}, ${count(tools, 'tool')}`),
+    arrived: (tokens, tools, parts) => {
+      const split = parts
+        ? ` (system ${group(parts.system)}, tools ${group(parts.tools)}, messages ${group(parts.messages)})`
+        : ''
+      line(`arrived, ${count(tokens, 'prompt token')}${split}, ${count(tools, 'tool')}`)
+    },
     ignored: (i) => {
       const parts = [
         ...Object.entries(i.blocks).map(([type, n]) => count(n, `${type} block`)),
