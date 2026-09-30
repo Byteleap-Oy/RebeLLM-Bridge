@@ -3,7 +3,8 @@
 Run [Claude Code](https://docs.claude.com/en/docs/claude-code) on the model in your
 [RebeLLM](https://rebellm.ai) browser tab. The bridge is a small local service: Claude Code
 talks to it as it would to Anthropic, the tab connects to it and does the work; the bridge
-runs no model and holds no keys.
+runs no model and holds no keys. It also works the other way: the tab's chat and coding agent
+read web pages through it ([Web pages for the tab](#web-pages-for-the-tab)).
 
 ```
 Claude Code ──HTTP──▶ rebellm-bridge (127.0.0.1:7343) ◀──WebSocket── RebeLLM tab
@@ -105,6 +106,16 @@ claude mcp add rebellm -- rebellm-bridge --mcp
 
 Tools: `chat` (messages, optional `max_tokens`, `temperature`; streams progress) and
 `status`. Raise `MCP_TOOL_TIMEOUT` if Claude Code gives up before a slow answer.
+
+## Web pages for the tab
+
+Most sites do not let web pages read them, so the tab's `fetch_url` tool (Chat and Code) cannot
+read them from the browser. While the bridge is connected, the tab hands such a page to it and
+the bridge reads it from this computer: the URL goes only to the site, not to a third party.
+Nothing to set up: start `rebellm-bridge` (or `rebellm-claude`) and switch Bridge on in the tab.
+Without a bridge the tab falls back to a public reader (r.jina.ai), which sees the URL and
+allows about 20 pages a minute. Private and local addresses are never read either way; the
+limits are under [Protocol](#protocol).
 
 ## Other clients
 
